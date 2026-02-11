@@ -1,0 +1,594 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: spellingbee
+---
+# -----------------------
+# UI Config (nginx + static files)
+# -----------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spellingbee-ui
+  namespace: spellingbee
+data:
+  nginx.conf: |
+    events {}
+    http {
+      server {
+        listen 8080;
+
+        # Serve UI
+        location / {
+          root /usr/share/nginx/html;
+          try_files $uri /index.html;
+        }
+
+        # Proxy API to gateway (same-origin, no CORS pain)
+        location /api/ {
+          proxy_pass http://spellingbee-gateway:8080/;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        }
+      }
+    }
+
+  index.html: |
+    <!doctype html>
+    <html>
+    <head>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <title>Spelling Bee MVP</title>
+      <style>
+        body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; max-width: 900px; }
+        .row { display: flex; gap: 16px; flex-wrap: wrap; }
+        .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; margin: 12px 0; }
+        button { padding: 10px 14px; border-radius: 10px; border: 1px solid #bbb; background: #fff; cursor: pointer; }
+        button.primary { background: #111; color: #fff; border-color: #111; }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        textarea { width: 100%; min-height: 120px; }
+        input[type="text"] { width: 100%; padding: 10px; border-radius: 10px; border: 1px solid #bbb; }
+        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+        .ok { color: #0a7; font-weight: 600; }
+        .bad { color: #c30; font-weight: 600; }
+        .hint { color: #666; }
+      </style>
+    </head>
+    <body>
+      <h1>Spelling Bee Assistant (MVP)</h1>
+
+      <div class="card">
+        <h2>1) Upload word list image</h2>
+        <input id="img" type="file" accept="image/*" />
+        <div class="row">
+          <button class="primary" id="btnExtract">Extract words (Nemotron VL)</button>
+          <button id="btnDemoList">Use demo list</button>
+        </div>
+        <p id="extractStatus" class="hint"></p>
+        <h3>Editable word list</h3>
+        <textarea id="wordsBox" placeholder="Words will appear here..."></textarea>
+      </div>
+
+      <div class="card">
+        <h2>2) Start session</h2>
+        <label>Student name</label>
+        <input id="studentName" type="text" value="Student" />
+        <div class="row">
+          <button class="primary" id="btnStart">Start</button>
+          <button id="btnSpeakPrompt" disabled>Speak prompt</button>
+        </div>
+
+        <p><b>Progress:</b> <span id="progress">-</span> &nbsp; <b>Score:</b> <span id="score">-</span></p>
+        <p><b>Word:</b> <span id="word" class="mono">-</span></p>
+        <p><b>Prompt:</b> <span id="prompt">-</span></p>
+      </div>
+
+      <div class="card">
+        <h2>3) Answer</h2>
+        <p class="hint">
+          Microphones in browsers usually require HTTPS for non-localhost.
+          If your browser blocks mic on http://NODE_IP:30080, use Chrome flags or run a local port-forward.
+        </p>
+
+        <div class="row">
+          <button class="primary" id="btnRecStart" disabled>Start Recording</button>
+          <button id="btnRecStop" disabled>Stop</button>
+          <button id="btnSubmit" disabled>Submit Audio</button>
+        </div>
+
+        <p><label><input id="useLiveStt" type="checkbox" /> Use Live Transcript (Chrome)</label></p>
+        <div class="row">
+          <button id="btnLiveStart" disabled>Start Live STT</button>
+          <button id="btnLiveStop" disabled>Stop Live STT</button>
+        </div>
+
+        <p><b>Transcript:</b></p>
+        <input id="transcript" type="text" placeholder="(Optional) If ASR not configured, paste transcript here." />
+
+        <p><b>Result:</b> <span id="result">-</span></p>
+        <p><b>Parsed letters:</b> <span id="letters" class="mono">-</span></p>
+        <p><b>Feedback:</b> <span id="feedback">-</span></p>
+        <div class="row">
+          <button id="btnSpeakFeedback" disabled>Speak feedback</button>
+        </div>
+      </div>
+
+      <script src="/app.js"></script>
+    </body>
+    </html>
+
+  app.js: |
+    const $ = (id) => document.getElementById(id);
+
+    const state = {
+      sessionId: null,
+      idx: 0,
+      total: 0,
+      word: null,
+      prompt: null,
+      mediaRecorder: null,
+      chunks: [],
+      audioBlob: null,
+      speechRec: null,
+    };
+
+    function speak(text) {
+      if (!text) return;
+      if (!("speechSynthesis" in window)) return;
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.rate = 0.95;
+      u.pitch = 1.0;
+      window.speechSynthesis.speak(u);
+    }
+
+    async function api(path, opts={}) {
+      const res = await fetch("/api" + path, opts);
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(`${res.status}: ${t}`);
+      }
+      return res.json();
+    }
+
+    function wordsFromBox() {
+      const raw = $("wordsBox").value || "";
+      return raw.split(/[\n,]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
+    }
+
+    function setStatus(el, msg, isErr=false) {
+      el.textContent = msg;
+      el.style.color = isErr ? "#c30" : "#666";
+    }
+
+    function updateUI() {
+      $("progress").textContent = state.sessionId ? `${state.idx+1} / ${state.total}` : "-";
+      $("word").textContent = state.word || "-";
+      $("prompt").textContent = state.prompt || "-";
+      $("btnSpeakPrompt").disabled = !state.prompt;
+      $("btnRecStart").disabled = !state.sessionId;
+      $("btnLiveStart").disabled = !state.sessionId || !$("useLiveStt").checked;
+    }
+
+    // 1) Extract words
+    $("btnExtract").onclick = async () => {
+      const f = $("img").files?.[0];
+      if (!f) return setStatus($("extractStatus"), "Pick an image first.", true);
+      setStatus($("extractStatus"), "Extracting with Nemotron VL...");
+      try {
+        const fd = new FormData();
+        fd.append("file", f);
+        const data = await api("/extract_words", { method: "POST", body: fd });
+        $("wordsBox").value = (data.words || []).join("\n");
+        setStatus($("extractStatus"), `Extracted ${data.words.length} words.`);
+      } catch (e) {
+        setStatus($("extractStatus"), "Extraction failed: " + e.message, true);
+      }
+    };
+
+    $("btnDemoList").onclick = () => {
+      $("wordsBox").value = ["rhythm","necessary","accommodate","beautiful","calendar"].join("\n");
+      setStatus($("extractStatus"), "Loaded demo list.");
+    };
+
+    // 2) Start session
+    $("btnStart").onclick = async () => {
+      const words = wordsFromBox();
+      if (!words.length) return alert("Add words first.");
+      try {
+        const data = await api("/session/start", {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ words, student_name: $("studentName").value || "Student" })
+        });
+        state.sessionId = data.session_id;
+        state.idx = data.idx;
+        state.word = data.word;
+        state.total = data.total;
+        $("score").textContent = "0 / 0";
+        await ask();
+        speak(state.prompt);
+      } catch (e) {
+        alert("Start failed: " + e.message);
+      }
+    };
+
+    async function ask() {
+      const fd = new FormData();
+      fd.append("session_id", state.sessionId);
+      const data = await api("/turn/ask", { method: "POST", body: fd });
+      state.idx = data.idx;
+      state.word = data.word;
+      state.prompt = data.prompt_text;
+      updateUI();
+    }
+
+    $("btnSpeakPrompt").onclick = () => speak(state.prompt);
+
+    // 3) Record audio
+    $("btnRecStart").onclick = async () => {
+      state.chunks = [];
+      state.audioBlob = null;
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mr = new MediaRecorder(stream);
+      state.mediaRecorder = mr;
+
+      mr.ondataavailable = (e) => { if (e.data.size > 0) state.chunks.push(e.data); };
+      mr.onstop = () => {
+        state.audioBlob = new Blob(state.chunks, { type: "audio/webm" });
+        $("btnSubmit").disabled = false;
+        $("btnRecStart").disabled = false;
+        $("btnRecStop").disabled = true;
+      };
+
+      mr.start();
+      $("btnRecStart").disabled = true;
+      $("btnRecStop").disabled = false;
+      $("btnSubmit").disabled = true;
+    };
+
+    $("btnRecStop").onclick = () => {
+      if (state.mediaRecorder && state.mediaRecorder.state !== "inactive") {
+        state.mediaRecorder.stop();
+      }
+    };
+
+    // Optional live transcript (Chrome)
+    function initSpeechRec() {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SR) return null;
+      const rec = new SR();
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.lang = "en-US";
+      rec.onresult = (evt) => {
+        let finalText = "";
+        for (let i = evt.resultIndex; i < evt.results.length; i++) {
+          const r = evt.results[i];
+          if (r.isFinal) finalText += r[0].transcript + " ";
+        }
+        if (finalText.trim()) $("transcript").value = finalText.trim();
+      };
+      return rec;
+    }
+
+    $("useLiveStt").onchange = () => {
+      const enabled = $("useLiveStt").checked;
+      $("btnLiveStart").disabled = !enabled || !state.sessionId;
+      $("btnLiveStop").disabled = true;
+      if (enabled && !state.speechRec) state.speechRec = initSpeechRec();
+      if (enabled && !state.speechRec) alert("Live transcript not supported in this browser. Use Chrome or upload audio.");
+    };
+
+    $("btnLiveStart").onclick = () => {
+      if (!state.speechRec) return;
+      state.speechRec.start();
+      $("btnLiveStart").disabled = true;
+      $("btnLiveStop").disabled = false;
+    };
+    $("btnLiveStop").onclick = () => {
+      if (!state.speechRec) return;
+      state.speechRec.stop();
+      $("btnLiveStart").disabled = false;
+      $("btnLiveStop").disabled = true;
+    };
+
+    // Submit answer
+    $("btnSubmit").onclick = async () => {
+      try {
+        const fd = new FormData();
+        fd.append("session_id", state.sessionId);
+
+        if (state.audioBlob) {
+          fd.append("audio", state.audioBlob, "answer.webm");
+        }
+        const tx = $("transcript").value || "";
+        if (tx.trim()) fd.append("transcript", tx.trim());
+
+        const data = await api("/turn/answer", { method: "POST", body: fd });
+
+        $("result").innerHTML = data.correct ? '<span class="ok">Correct</span>' : '<span class="bad">Incorrect</span>';
+        $("letters").textContent = data.letters || "(none)";
+        $("feedback").textContent = data.feedback_text || "";
+        $("btnSpeakFeedback").disabled = !data.feedback_text;
+
+        $("score").textContent = `${data.score_correct} / ${data.score_total}`;
+
+        if (data.done) {
+          state.prompt = "All done!";
+          state.word = "";
+          updateUI();
+          speak(data.feedback_text);
+          return;
+        }
+
+        await ask();
+        speak(state.prompt);
+
+      } catch (e) {
+        alert("Submit failed: " + e.message + "\n\nIf ASR isn't configured, enable Live Transcript or type transcript manually.");
+      }
+    };
+
+    $("btnSpeakFeedback").onclick = () => speak($("feedback").textContent);
+
+    updateUI();
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spellingbee-ui
+  namespace: spellingbee
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: spellingbee-ui }
+  template:
+    metadata:
+      labels: { app: spellingbee-ui }
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: controller
+      containers:
+        - name: nginx
+          image: nginx:1.27-alpine
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: ui
+              mountPath: /usr/share/nginx/html/index.html
+              subPath: index.html
+            - name: ui
+              mountPath: /usr/share/nginx/html/app.js
+              subPath: app.js
+            - name: ui
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+      volumes:
+        - name: ui
+          configMap:
+            name: spellingbee-ui
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spellingbee-ui
+  namespace: spellingbee
+spec:
+  type: NodePort
+  selector: { app: spellingbee-ui }
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 30080
+---
+# -----------------------
+# Gateway (FastAPI)
+# -----------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spellingbee-gateway
+  namespace: spellingbee
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: spellingbee-gateway }
+  template:
+    metadata:
+      labels: { app: spellingbee-gateway }
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: controller
+      containers:
+        - name: gateway
+          image: localhost:32000/spellingbee-gateway:0.1
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: VLLM_TEXT_BASE
+              value: "http://vllm-nemotron-text:8000/v1"
+            - name: VLLM_TEXT_MODEL
+              value: "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"
+            - name: VLLM_VL_BASE
+              value: "http://vllm-nemotron-vl:5566/v1"
+            - name: VLLM_VL_MODEL
+              value: "nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16"
+            # Optional: plug in ASR service later
+            - name: ASR_BASE
+              value: ""
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spellingbee-gateway
+  namespace: spellingbee
+spec:
+  type: ClusterIP
+  selector: { app: spellingbee-gateway }
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+
+# -----------------------
+# OPTIONAL: GPU vLLM - Nemotron 3 Nano (text)
+# -----------------------
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-nemotron-text
+  namespace: spellingbee
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: vllm-nemotron-text }
+  template:
+    metadata:
+      labels: { app: vllm-nemotron-text }
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: spark-02
+      containers:
+        - name: vllm
+          image: nvcr.io/nvidia/vllm:26.01-py3  # DGX Spark-validated (alt: scitrera/dgx-spark-vllm:0.14.0-t4)
+          ports:
+            - containerPort: 8000
+          env:
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: token
+          command: ["python3", "-m", "vllm.entrypoints.openai.api_server"]
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+          args:
+            - "--model"
+            - "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"
+            - "--served-model-name"
+            - "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"
+            - "--port"
+            - "8000"
+            - "--trust-remote-code"
+            - "--max-num-seqs"
+            - "8"
+            - "--tensor-parallel-size"
+            - "1"
+          volumeMounts:
+            - name: hf-cache
+              mountPath: /root/.cache/huggingface
+      volumes:
+        - name: hf-cache
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-nemotron-text
+  namespace: spellingbee
+spec:
+  type: ClusterIP
+  selector: { app: vllm-nemotron-text }
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+
+# -----------------------
+# OPTIONAL: GPU vLLM - Nemotron Nano 12B v2 VL (vision-language)
+# Port 5566 matches vLLM recipe defaults.
+# -----------------------
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-nemotron-vl
+  namespace: spellingbee
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: vllm-nemotron-vl }
+  template:
+    metadata:
+      labels: { app: vllm-nemotron-vl }
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: spark-01
+      containers:
+        - name: vllm
+          image: nvcr.io/nvidia/vllm:26.01-py3  # DGX Spark-validated (alt: scitrera/dgx-spark-vllm:0.14.0-t4)
+          ports:
+            - containerPort: 5566
+          env:
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: token
+            - name: VLLM_VIDEO_LOADER_BACKEND
+              value: "opencv"
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+          command: ["python3", "-m", "vllm.entrypoints.openai.api_server"]
+          args:
+            - "--model"
+            - "nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16"
+            - "--served-model-name"
+            - "nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16"
+            - "--trust-remote-code"
+            - "--max-model-len"
+            - "16384"  # OCR use-case; raise for long videos
+            - "--data-parallel-size"
+            - "1"
+            - "--port"
+            - "5566"
+            - "--allowed-local-media-path"
+            - "/"
+            - "--video-pruning-rate"
+            - "0"
+          volumeMounts:
+            - name: hf-cache
+              mountPath: /root/.cache/huggingface
+      volumes:
+        - name: hf-cache
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-nemotron-vl
+  namespace: spellingbee
+spec:
+  type: ClusterIP
+  selector: { app: vllm-nemotron-vl }
+  ports:
+    - name: http
+      port: 5566
+      targetPort: 5566
+---
+# HF token secret (replace with your real token; don't commit it)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: hf-token
+  namespace: spellingbee
+type: Opaque
+stringData:
+  token: "REPLACE_ME"
