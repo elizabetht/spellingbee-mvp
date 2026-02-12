@@ -85,7 +85,7 @@ Option B: Chrome flag:
 
 ## 5) Verify model endpoints
 The gateway calls:
-- Text LLM: `http://vllm-nemotron-text:8000/v1`
+- Text LLM: `http://vllm-llama-31-8b:8000/v1`
 - VL: `http://vllm-nemotron-vl:5566/v1`
 
 If you want to deploy only the gateway+UI first:

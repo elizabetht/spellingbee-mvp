@@ -410,7 +410,7 @@ spec:
           imagePullPolicy: IfNotPresent
           env:
             - name: VLLM_TEXT_BASE
-              value: "http://vllm-nemotron-text:8000/v1"
+              value: "http://vllm-llama-31-8b:8000/v1"
             - name: VLLM_TEXT_MODEL
               value: "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4"
             - name: VLLM_VL_BASE
@@ -445,21 +445,21 @@ spec:
       targetPort: 8080
 
 # -----------------------
-# OPTIONAL: GPU vLLM - Nemotron 3 Nano (text)
+# OPTIONAL: GPU vLLM - Llama 3.1 8B (text)
 # -----------------------
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: vllm-nemotron-text
+  name: vllm-llama-31-8b
   namespace: spellingbee
 spec:
   replicas: 1
   selector:
-    matchLabels: { app: vllm-nemotron-text }
+    matchLabels: { app: vllm-llama-31-8b }
   template:
     metadata:
-      labels: { app: vllm-nemotron-text }
+      labels: { app: vllm-llama-31-8b }
     spec:
       runtimeClassName: nvidia
       nodeSelector:
@@ -502,11 +502,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: vllm-nemotron-text
+  name: vllm-llama-31-8b
   namespace: spellingbee
 spec:
   type: ClusterIP
-  selector: { app: vllm-nemotron-text }
+  selector: { app: vllm-llama-31-8b }
   ports:
     - name: http
       port: 8000

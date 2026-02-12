@@ -15,7 +15,7 @@ APP_NAME = "spellingbee-gateway"
 
 # --------- Config (via env) ----------
 # vLLM OpenAI-compatible endpoints
-VLLM_TEXT_BASE = os.getenv("VLLM_TEXT_BASE", "http://vllm-nemotron-text:8000/v1")
+VLLM_TEXT_BASE = os.getenv("VLLM_TEXT_BASE", "http://vllm-llama-31-8b:8000/v1")
 VLLM_TEXT_MODEL = os.getenv("VLLM_TEXT_MODEL", "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16")
 
 VLLM_VL_BASE = os.getenv("VLLM_VL_BASE", "http://vllm-nemotron-vl:5566/v1")
