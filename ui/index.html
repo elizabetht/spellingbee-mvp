@@ -11,20 +11,25 @@
 
   <div class="card" id="setupCard">
     <h2>1) Upload word list image</h2>
-    <input id="img" type="file" accept="image/*" />
-    <div class="row">
-      <button class="primary" id="btnExtract">Extract words (Nemotron VL)</button>
-      <button id="btnDemoList">Use demo list</button>
+    <div id="uploadSection">
+      <input id="img" type="file" accept="image/*" />
+      <div class="row">
+        <button class="primary" id="btnExtract">Extract words (Nemotron VL)</button>
+        <button id="btnDemoList">Use demo list</button>
+      </div>
+      <p id="extractStatus" class="hint"></p>
+      <h3>Editable word list</h3>
+      <textarea id="wordsBox" placeholder="Words will appear here..."></textarea>
     </div>
-    <p id="extractStatus" class="hint"></p>
-    <h3>Editable word list</h3>
-    <textarea id="wordsBox" placeholder="Words will appear here..."></textarea>
   </div>
 
   <div class="card" id="sessionCard">
     <h2>2) Start session</h2>
     <div id="sessionReady">
       <p id="wordCountMsg" class="ok" style="display:none; font-size: 1.1em; margin: 12px 0;"></p>
+      <p id="editListBeforeStart" style="display:none;">
+        <button id="btnEditListBeforeStart">← Edit word list</button>
+      </p>
       <label>Student name</label>
       <input id="studentName" type="text" value="Student" />
       <div class="row">

@@ -13,6 +13,7 @@ const state = {
   handsFreeActive: false,
   micStream: null,
   audioCtx: null,
+  editingWordList: false, // Track if user is editing the word list
 };
 
 /* ── TTS via ElevenLabs (through gateway) ─────────────── */
@@ -121,17 +122,33 @@ function updateUI() {
   const hf = $("hfStatus");
   if (hf) hf.style.display = state.handsFreeActive ? "block" : "none";
   
-  // Show/hide sections based on session state
+  // Show/hide sections based on session state and words loaded
   const isActive = !!state.sessionId;
+  const words = wordsFromBox();
+  const hasWords = words.length > 0;
+  
+  // Hide upload section once words are loaded (unless user is editing)
+  const uploadSection = $("uploadSection");
+  if (uploadSection) {
+    uploadSection.style.display = (hasWords && !state.editingWordList) ? "none" : "block";
+  }
+  
+  // Hide entire setup card during active session
   $("setupCard").style.display = isActive ? "none" : "block";
+  
   $("sessionReady").style.display = isActive ? "none" : "block";
   $("sessionActive").style.display = isActive ? "block" : "none";
   
+  // Show "Edit word list" button before starting if words are loaded
+  const editListBeforeStart = $("editListBeforeStart");
+  if (editListBeforeStart) {
+    editListBeforeStart.style.display = (!isActive && hasWords && !state.editingWordList) ? "block" : "none";
+  }
+  
   // Update word count message (only when session is not active)
   if (!isActive) {
-    const words = wordsFromBox();
     const wordCountMsg = $("wordCountMsg");
-    if (words.length > 0) {
+    if (hasWords && !state.editingWordList) {
       wordCountMsg.textContent = `✓ ${words.length} word${words.length !== 1 ? 's' : ''} loaded!`;
       wordCountMsg.style.display = "block";
     } else {
@@ -281,6 +298,7 @@ $("btnExtract").onclick = async () => {
     const data = await api("/extract_words", { method: "POST", body: fd });
     $("wordsBox").value = (data.words || []).join("\n");
     setStatus($("extractStatus"), `Extracted ${data.words.length} words.`);
+    state.editingWordList = false; // Exit editing mode after loading words
     updateUI();
   } catch (e) {
     setStatus($("extractStatus"), "Extraction failed: " + e.message, true);
@@ -290,6 +308,7 @@ $("btnExtract").onclick = async () => {
 $("btnDemoList").onclick = () => {
   $("wordsBox").value = ["rhythm","necessary","accommodate","beautiful","calendar"].join("\n");
   setStatus($("extractStatus"), "Loaded demo list.");
+  state.editingWordList = false; // Exit editing mode after loading words
   updateUI();
 };
 
@@ -464,6 +483,7 @@ $("btnEditList").onclick = () => {
   state.word = null;
   state.prompt = null;
   state.handsFreeActive = false;
+  state.editingWordList = true; // Enable editing mode
   
   // Clean up any active recording
   cleanupMic();
@@ -475,6 +495,12 @@ $("btnEditList").onclick = () => {
   $("result").textContent = "-";
   $("letters").textContent = "-";
   $("feedback").textContent = "-";
+  updateUI();
+};
+
+$("btnEditListBeforeStart").onclick = () => {
+  // Enable editing mode to show upload section
+  state.editingWordList = true;
   updateUI();
 };
 
