@@ -1,92 +1,110 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Spelling Bee MVP</title>
+  <title>SpellingBee</title>
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
-  <h1>Spelling Bee Assistant (MVP)</h1>
+  <!-- ── Header ── -->
+  <header>
+    <div class="logo">&#x1F41D; SpellingBee</div>
+    <div id="scoreBar" class="score-bar hidden">
+      <span class="score-label">Score</span>
+      <span id="score" class="score-value">0 / 0</span>
+      <span id="progress" class="progress-pill"></span>
+    </div>
+  </header>
 
-  <div class="card" id="setupCard">
-    <h2>1) Upload word list image</h2>
-    <div id="uploadSection">
-      <input id="img" type="file" accept="image/*" />
-      <div class="row">
-        <button class="primary" id="btnExtract">Extract words (Nemotron VL)</button>
-        <button id="btnDemoList">Use demo list</button>
+  <main>
+    <!-- ── Stage: Setup ── -->
+    <section id="stageSetup" class="stage fade-in">
+      <div class="hero-text">
+        <h1>Ready to practice?</h1>
+        <p class="subtitle">Upload a word-list photo or try a demo list.</p>
       </div>
-      <p id="extractStatus" class="hint"></p>
-      <h3>Editable word list</h3>
-      <textarea id="wordsBox" placeholder="Words will appear here..."></textarea>
-    </div>
-  </div>
 
-  <div class="card" id="sessionCard">
-    <h2>2) Start session</h2>
-    <div id="sessionReady">
-      <p id="wordCountMsg" class="ok" style="display:none; font-size: 1.1em; margin: 12px 0;"></p>
-      <p id="editListBeforeStart" style="display:none;">
-        <button id="btnEditListBeforeStart">← Edit word list</button>
-      </p>
-      <label>Student name</label>
-      <input id="studentName" type="text" value="Student" />
-      <div class="row">
-        <button class="primary" id="btnStart">Start</button>
+      <label for="img" class="upload-zone" id="uploadZone">
+        <span class="upload-icon">&#x1F4F7;</span>
+        <span class="upload-text">Tap to upload word list image</span>
+        <input id="img" type="file" accept="image/*" />
+      </label>
+
+      <div class="btn-row">
+        <button class="btn primary" id="btnExtract">Extract Words</button>
+        <button class="btn outline" id="btnDemoList">Demo List</button>
       </div>
-    </div>
-    <div id="sessionActive" style="display:none;">
-      <p><button id="btnEditList">← Edit word list</button></p>
-      <hr/>
-      <div class="row">
-        <button id="btnSpeakPrompt" disabled>Speak prompt</button>
+      <p id="extractStatus" class="status-msg"></p>
+
+      <div id="wordEditor" class="word-editor hidden">
+        <div class="word-count" id="wordCount"></div>
+        <textarea id="wordsBox" placeholder="One word per line&#8230;"></textarea>
+        <div class="btn-row">
+          <button class="btn accent large" id="btnStartSession">&#x25B6; Start Practice</button>
+        </div>
       </div>
-    </div>
+    </section>
 
-    <p><b>Progress:</b> <span id="progress">-</span> &nbsp; <b>Score:</b> <span id="score">-</span></p>
-    <p><b>Word:</b> <span id="word" class="mono">-</span></p>
-    <p><b>Prompt:</b> <span id="prompt">-</span></p>
-    <hr/>
-    <p><label><input id="handsFree" type="checkbox" /> <b>Hands-Free Mode</b> — auto-listen, check &amp; advance</label></p>
-    <div id="hfStatus" style="display:none; padding:10px; border-radius:8px; background:#f0f9f4; margin-top:8px;">
-      <p id="hfText" style="margin:4px 0; font-weight:600;">Ready</p>
-      <div id="liveTranscript" style="font-size:1.3em; font-family:monospace; min-height:36px; padding:8px; background:#fff; border:2px solid #0a7; border-radius:8px; margin:8px 0; color:#333;"></div>
-      <button id="btnHFStop" style="background:#c30; color:#fff; border-color:#c30;">Stop Hands-Free</button>
-    </div>
-  </div>
+    <!-- ── Stage: Active session ── -->
+    <section id="stageSession" class="stage hidden">
+      <!-- Prompt card -->
+      <div class="prompt-card">
+        <span class="prompt-label">Spell this word</span>
+        <button class="btn icon" id="btnSpeakPrompt" title="Hear the word again">&#x1F50A;</button>
+      </div>
 
-  <div class="card">
-    <h2>3) Answer</h2>
-    <p class="hint" id="micHint">
-      <b>Mic not working?</b> Browsers require HTTPS for mic on non-localhost.<br/>
-      Fix: <code>microk8s kubectl -n spellingbee port-forward svc/spellingbee-ui 8080:8080</code><br/>
-      then open <a href="http://localhost:8080">http://localhost:8080</a><br/>
-      Or: Chrome &rarr; <code>chrome://flags</code> &rarr; "Insecure origins treated as secure" &rarr; add your URL.
-    </p>
+      <!-- Listening ring -->
+      <div class="listen-area">
+        <div id="listenRing" class="listen-ring idle">
+          <span id="listenIcon" class="listen-emoji">&#x1F3A4;</span>
+        </div>
+        <p id="listenStatus" class="listen-status">Tap &#x25B6; to begin</p>
+        <div id="liveTranscript" class="live-transcript"></div>
+      </div>
 
-    <div class="row">
-      <button class="primary" id="btnRecStart" disabled>Start Recording</button>
-      <button id="btnRecStop" disabled>Stop</button>
-      <button id="btnSubmit" disabled>Submit Audio</button>
-    </div>
+      <!-- Result -->
+      <div id="resultArea" class="result-area hidden">
+        <div id="resultBadge" class="result-badge"></div>
+        <p id="resultLetters" class="result-letters"></p>
+        <p id="feedback" class="feedback-text"></p>
+        <button class="btn icon small" id="btnSpeakFeedback" title="Hear feedback">&#x1F50A;</button>
+      </div>
 
-    <p><label><input id="useLiveStt" type="checkbox" /> Use Live Transcript (Chrome)</label></p>
-    <div class="row">
-      <button id="btnLiveStart" disabled>Start Live STT</button>
-      <button id="btnLiveStop" disabled>Stop Live STT</button>
-    </div>
+      <!-- Main action buttons -->
+      <div class="action-row">
+        <button class="btn accent large pulse" id="btnHandsFree">&#x25B6; Start</button>
+        <button class="btn danger large hidden" id="btnHFStop">&#x23F9; Stop</button>
+      </div>
 
-    <p><b>Transcript:</b></p>
-    <input id="transcript" type="text" placeholder="(Optional) If ASR not configured, paste transcript here." />
+      <!-- Manual fallback (collapsed) -->
+      <details class="manual-section">
+        <summary>Manual mode</summary>
+        <div class="manual-inner">
+          <div class="btn-row">
+            <button class="btn" id="btnRecStart">&#x23FA; Record</button>
+            <button class="btn" id="btnRecStop" disabled>&#x23F9; Stop</button>
+            <button class="btn primary" id="btnSubmit" disabled>Submit</button>
+          </div>
+          <input id="transcript" type="text" placeholder="Or type letters here&#8230;" class="text-input" />
+        </div>
+      </details>
 
-    <p><b>Result:</b> <span id="result">-</span></p>
-    <p><b>Parsed letters:</b> <span id="letters" class="mono">-</span></p>
-    <p><b>Feedback:</b> <span id="feedback">-</span></p>
-    <div class="row">
-      <button id="btnSpeakFeedback" disabled>Speak feedback</button>
-    </div>
-  </div>
+      <div class="session-footer">
+        <button class="btn ghost small" id="btnEditList">&#x2190; Change Words</button>
+      </div>
+    </section>
+
+    <!-- ── Stage: Done ── -->
+    <section id="stageDone" class="stage hidden">
+      <div class="done-card fade-in">
+        <div class="done-emoji">&#x1F389;</div>
+        <h2>Amazing work!</h2>
+        <p id="finalScore" class="final-score"></p>
+        <button class="btn accent large" id="btnRestart">Practice Again</button>
+      </div>
+    </section>
+  </main>
 
   <script src="/app.js"></script>
 </body>
