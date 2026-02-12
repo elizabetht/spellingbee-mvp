@@ -490,6 +490,8 @@ spec:
           args:
             - "meta-llama/Llama-3.1-8B-Instruct"
             - "--trust-remote-code"
+            - "--gpu-memory-utilization"
+            - "0.3"
             - "--attention-backend"
             - "FLASHINFER"
             - "--port"
@@ -563,6 +565,8 @@ spec:
           args:
             - "nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-FP8"
             - "--trust-remote-code"
+            - "--gpu-memory-utilization"
+            - "0.3"
             - "--attention-backend"
             - "FLASHINFER"
             - "--port"
