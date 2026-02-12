@@ -39,9 +39,12 @@
 
       <div id="wordEditor" class="word-editor hidden">
         <div class="word-count" id="wordCount"></div>
-        <textarea id="wordsBox" placeholder="One word per line&#8230;"></textarea>
+        <textarea id="wordsBox" class="hidden" placeholder="One word per line&#8230;"></textarea>
         <div class="btn-row">
           <button class="btn accent large" id="btnStartSession">&#x25B6; Start Practice</button>
+        </div>
+        <div class="btn-row">
+          <button class="btn ghost small" id="btnToggleWords">Show / Edit Words</button>
         </div>
       </div>
     </section>
@@ -59,7 +62,7 @@
         <div id="listenRing" class="listen-ring idle">
           <span id="listenIcon" class="listen-emoji">&#x1F3A4;</span>
         </div>
-        <p id="listenStatus" class="listen-status">Tap &#x25B6; to begin</p>
+        <p id="listenStatus" class="listen-status"></p>
         <div id="liveTranscript" class="live-transcript"></div>
       </div>
 
@@ -71,24 +74,10 @@
         <button class="btn icon small" id="btnSpeakFeedback" title="Hear feedback">&#x1F50A;</button>
       </div>
 
-      <!-- Main action buttons -->
+      <!-- Score -->
       <div class="action-row">
-        <button class="btn accent large pulse" id="btnHandsFree">&#x25B6; Start</button>
-        <button class="btn danger large hidden" id="btnHFStop">&#x23F9; Stop</button>
+        <button class="btn danger large" id="btnEndPractice">&#x23F9; End Practice</button>
       </div>
-
-      <!-- Manual fallback (collapsed) -->
-      <details class="manual-section">
-        <summary>Manual mode</summary>
-        <div class="manual-inner">
-          <div class="btn-row">
-            <button class="btn" id="btnRecStart">&#x23FA; Record</button>
-            <button class="btn" id="btnRecStop" disabled>&#x23F9; Stop</button>
-            <button class="btn primary" id="btnSubmit" disabled>Submit</button>
-          </div>
-          <input id="transcript" type="text" placeholder="Or type letters here&#8230;" class="text-input" />
-        </div>
-      </details>
 
       <div class="session-footer">
         <button class="btn ghost small" id="btnEditList">&#x2190; Change Words</button>

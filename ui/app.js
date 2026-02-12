@@ -218,7 +218,9 @@ function recordWithVAD() {
         const rms = Math.sqrt(s / buf.length) * 100;
         if (rms > 3) { sp++; sil = 0; }
         else if (sp > 15) { sil++; }
-        if (sil > 50 && sp > 15) {
+        // Wait for ~3 seconds of silence (180 frames at ~60fps) before stopping
+        // This gives the child plenty of time to pause between letters
+        if (sil > 180 && sp > 15) {
           stopped = true; clearTimeout(cap);
           setRing("processing", "\u2699\uFE0F", "Processing\u2026");
           mr.stop();
@@ -249,8 +251,6 @@ async function handsFreeLoop() {
   } catch (e) {
     setRing("wrong", "\u26A0\uFE0F", "Mic error: " + e.message);
     state.handsFreeActive = false;
-    $("btnHandsFree").classList.remove("hidden");
-    $("btnHFStop").classList.add("hidden");
     return;
   }
   if (!state.handsFreeActive) return;
@@ -283,8 +283,6 @@ async function handsFreeLoop() {
   } catch (e) {
     setRing("wrong", "\u26A0\uFE0F", "Error: " + e.message);
     state.handsFreeActive = false;
-    $("btnHandsFree").classList.remove("hidden");
-    $("btnHFStop").classList.add("hidden");
   }
 }
 
@@ -333,8 +331,14 @@ $("btnDemoList").onclick = () => {
 
 function showWordEditor() {
   $("wordEditor").classList.remove("hidden");
+  // Keep words hidden by default so the child can't see them
+  $("wordsBox").classList.add("hidden");
   updateWordCount();
 }
+
+$("btnToggleWords").onclick = () => {
+  $("wordsBox").classList.toggle("hidden");
+};
 
 function updateWordCount() {
   const words = wordsFromBox();
@@ -363,8 +367,9 @@ $("btnStartSession").onclick = async () => {
     await ask();
     showStage("stageSession");
     hideResult();
-    setRing("idle", "\u{1F3A4}", "Tap \u25B6 to begin");
-    setLiveTranscript("");
+    // Auto-start hands-free immediately
+    state.handsFreeActive = true;
+    handsFreeLoop();
   } catch (e) {
     alert("Start failed: " + e.message);
   }
@@ -373,84 +378,15 @@ $("btnStartSession").onclick = async () => {
 // Speak prompt
 $("btnSpeakPrompt").onclick = () => speak(state.prompt);
 
-// Hands-free start
-$("btnHandsFree").onclick = () => {
-  state.handsFreeActive = true;
-  $("btnHandsFree").classList.add("hidden");
-  $("btnHFStop").classList.remove("hidden");
-  handsFreeLoop();
-};
-
-// Hands-free stop
-$("btnHFStop").onclick = () => {
+// End practice
+$("btnEndPractice").onclick = () => {
   state.handsFreeActive = false;
   cleanupMic();
   if (currentAudio) { currentAudio.pause(); currentAudio = null; }
   if ("speechSynthesis" in window) window.speechSynthesis.cancel();
-  setRing("idle", "\u{1F3A4}", "Stopped");
-  setLiveTranscript("");
-  $("btnHandsFree").classList.remove("hidden");
-  $("btnHFStop").classList.add("hidden");
-};
-
-// Manual record
-$("btnRecStart").onclick = async () => {
-  if (state.handsFreeActive) return;
-  state.chunks = [];
-  state.audioBlob = null;
-  let stream;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  } catch (err) {
-    alert("Microphone access blocked. Use HTTPS or localhost.");
-    return;
-  }
-  const mr = new MediaRecorder(stream);
-  state.mediaRecorder = mr;
-  mr.ondataavailable = (e) => { if (e.data.size > 0) state.chunks.push(e.data); };
-  mr.onstop = () => {
-    state.audioBlob = new Blob(state.chunks, { type: "audio/webm" });
-    stream.getTracks().forEach(t => t.stop());
-    $("btnSubmit").disabled = false;
-    $("btnRecStart").disabled = false;
-    $("btnRecStop").disabled = true;
-  };
-  mr.start();
-  $("btnRecStart").disabled = true;
-  $("btnRecStop").disabled = false;
-  $("btnSubmit").disabled = true;
-};
-
-$("btnRecStop").onclick = () => {
-  if (state.mediaRecorder && state.mediaRecorder.state !== "inactive") {
-    state.mediaRecorder.stop();
-  }
-};
-
-// Manual submit
-$("btnSubmit").onclick = async () => {
-  try {
-    const fd = new FormData();
-    fd.append("session_id", state.sessionId);
-    if (state.audioBlob) fd.append("audio", state.audioBlob, "answer.webm");
-    const tx = $("transcript").value || "";
-    if (tx.trim()) fd.append("transcript", tx.trim());
-
-    const data = await api("/turn/answer", { method: "POST", body: fd });
-    $("score").textContent = `${data.score_correct} / ${data.score_total}`;
-    showResult(data.correct, data.letters, data.feedback_text);
-
-    if (data.done) {
-      $("finalScore").textContent = `${data.score_correct} out of ${data.score_total} correct`;
-      showStage("stageDone");
-      speak(data.feedback_text);
-      return;
-    }
-    await ask();
-    speak(state.prompt);
-  } catch (e) {
-    alert("Submit failed: " + e.message);
-  }
+  state.sessionId = null;
+  showStage("stageSetup");
+  showWordEditor();
 };
 
 // Speak feedback
