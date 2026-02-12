@@ -55,6 +55,7 @@ async def transcribe(file: UploadFile = File(...)):
             language="en",
             beam_size=5,
             vad_filter=True,  # skip silence
+            initial_prompt="The speaker is spelling a word by saying one letter at a time, like A, B, C, D, E, F, G.",
         )
         text = " ".join(seg.text.strip() for seg in segments).strip()
         elapsed = round(time.time() - t0, 2)

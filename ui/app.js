@@ -154,6 +154,7 @@ function recordWithVAD() {
 
       /* Live transcript via browser SpeechRecognition */
       let liveRec = null;
+      let browserTranscript = '';
       const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (SR) {
         liveRec = new SR();
@@ -167,7 +168,8 @@ function recordWithVAD() {
             if (r.isFinal) final += r[0].transcript;
             else interim += r[0].transcript;
           }
-          setLiveTranscript(final + interim || '...');
+          browserTranscript = (final + interim).trim();
+          setLiveTranscript(browserTranscript || '...');
         };
         liveRec.onerror = () => {};
         try { liveRec.start(); } catch(e) {}
@@ -178,7 +180,7 @@ function recordWithVAD() {
         stopped = true; if (cap) clearTimeout(cap);
         if (liveRec) try { liveRec.stop(); } catch(e) {}
         cleanupMic();
-        resolve(new Blob(chunks, { type: 'audio/webm' }));
+        resolve({ blob: new Blob(chunks, { type: 'audio/webm' }), transcript: browserTranscript });
       };
       mr.start();
       $('btnRecStop').disabled = false;
@@ -212,9 +214,9 @@ async function handsFreeLoop() {
   if (!state.handsFreeActive) return;
   await new Promise(r => setTimeout(r, 600));
   if (!state.handsFreeActive) return;
-  setHFStatus("Listening... spell the word!");
-  let blob;
-  try { blob = await recordWithVAD(); } catch (e) {
+  setHFStatus("Listening... say each letter slowly and clearly!");
+  let recording;
+  try { recording = await recordWithVAD(); } catch (e) {
     setHFStatus("Mic error: " + e.message);
     state.handsFreeActive = false; updateUI(); return;
   }
@@ -223,7 +225,8 @@ async function handsFreeLoop() {
   try {
     const fd = new FormData();
     fd.append("session_id", state.sessionId);
-    fd.append("audio", blob, "answer.webm");
+    fd.append("audio", recording.blob, "answer.webm");
+    if (recording.transcript) fd.append("transcript", recording.transcript);
     const data = await api("/turn/answer", { method: "POST", body: fd });
     $("result").innerHTML = data.correct
       ? '<span class="ok">Correct!</span>'
