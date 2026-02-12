@@ -260,6 +260,33 @@ async function handsFreeLoop() {
   }
   if (!state.handsFreeActive) return;
 
+  // Check if the child asked for a definition instead of spelling
+  const tx = (recording.transcript || "").toLowerCase();
+  const defPattern = /\b(definition|meaning|what does it mean|what does that mean|what is that|what's that mean|use it in a sentence|sentence|explain)\b/;
+  if (defPattern.test(tx)) {
+    setRing("idle", "\u{1F4D6}", "Getting definition\u2026");
+    try {
+      const ctx = await api("/word/context", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ word: state.word, session_id: state.sessionId }),
+      });
+      const defText = ctx.definition
+        ? `${state.word} means ${ctx.definition}${ctx.sentence ? ". For example: " + ctx.sentence : ""}`
+        : `${state.word}. It's a spelling word.`;
+      await speakAndWait(defText);
+    } catch (e) {
+      await speakAndWait(`Sorry, I couldn't get the definition for ${state.word}.`);
+    }
+    // Re-prompt and listen again (don't count as an attempt)
+    if (state.handsFreeActive) {
+      await speakAndWait(`Now spell ${state.word}.`);
+      await new Promise(r => setTimeout(r, 400));
+      handsFreeLoop();
+    }
+    return;
+  }
+
   setRing("processing", "\u2699\uFE0F", "Checking\u2026");
   try {
     const fd = new FormData();
