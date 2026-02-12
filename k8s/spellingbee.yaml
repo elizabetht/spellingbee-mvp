@@ -59,7 +59,7 @@ data:
     <body>
       <h1>Spelling Bee Assistant (MVP)</h1>
 
-      <div class="card">
+      <div class="card" id="setupCard">
         <h2>1) Upload word list image</h2>
         <input id="img" type="file" accept="image/*" />
         <div class="row">
@@ -71,13 +71,22 @@ data:
         <textarea id="wordsBox" placeholder="Words will appear here..."></textarea>
       </div>
 
-      <div class="card">
+      <div class="card" id="sessionCard">
         <h2>2) Start session</h2>
-        <label>Student name</label>
-        <input id="studentName" type="text" value="Student" />
-        <div class="row">
-          <button class="primary" id="btnStart">Start</button>
-          <button id="btnSpeakPrompt" disabled>Speak prompt</button>
+        <div id="sessionReady">
+          <p id="wordCountMsg" class="ok" style="display:none; font-size: 1.1em; margin: 12px 0;"></p>
+          <label>Student name</label>
+          <input id="studentName" type="text" value="Student" />
+          <div class="row">
+            <button class="primary" id="btnStart">Start</button>
+          </div>
+        </div>
+        <div id="sessionActive" style="display:none;">
+          <p><button id="btnEditList">← Edit word list</button></p>
+          <hr/>
+          <div class="row">
+            <button id="btnSpeakPrompt" disabled>Speak prompt</button>
+          </div>
         </div>
 
         <p><b>Progress:</b> <span id="progress">-</span> &nbsp; <b>Score:</b> <span id="score">-</span></p>
@@ -251,6 +260,22 @@ data:
       $("btnLiveStart").disabled = !state.sessionId || !$("useLiveStt").checked;
       const hf = $("hfStatus");
       if (hf) hf.style.display = state.handsFreeActive ? "block" : "none";
+      
+      // Show/hide sections based on session state
+      const isActive = !!state.sessionId;
+      $("setupCard").style.display = isActive ? "none" : "block";
+      $("sessionReady").style.display = isActive ? "none" : "block";
+      $("sessionActive").style.display = isActive ? "block" : "none";
+      
+      // Update word count message
+      const words = wordsFromBox();
+      const wordCountMsg = $("wordCountMsg");
+      if (words.length > 0) {
+        wordCountMsg.textContent = `✓ ${words.length} word${words.length !== 1 ? 's' : ''} loaded!`;
+        wordCountMsg.style.display = "block";
+      } else {
+        wordCountMsg.style.display = "none";
+      }
     }
 
     /* -- VAD Recording ----------------------------------------- */
@@ -391,6 +416,7 @@ data:
         const data = await api("/extract_words", { method: "POST", body: fd });
         $("wordsBox").value = (data.words || []).join("\n");
         setStatus($("extractStatus"), `Extracted ${data.words.length} words.`);
+        updateUI();
       } catch (e) {
         setStatus($("extractStatus"), "Extraction failed: " + e.message, true);
       }
@@ -399,6 +425,7 @@ data:
     $("btnDemoList").onclick = () => {
       $("wordsBox").value = ["rhythm","necessary","accommodate","beautiful","calendar"].join("\n");
       setStatus($("extractStatus"), "Loaded demo list.");
+      updateUI();
     };
 
     // 2) Start session
@@ -566,6 +593,28 @@ data:
 
     $("btnSpeakFeedback").onclick = () => speak($("feedback").textContent);
 
+    $("btnEditList").onclick = () => {
+      // End current session
+      state.sessionId = null;
+      state.idx = 0;
+      state.total = 0;
+      state.word = null;
+      state.prompt = null;
+      state.handsFreeActive = false;
+      
+      // Clean up any active recording
+      cleanupMic();
+      if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+      window.speechSynthesis.cancel();
+      
+      // Reset UI
+      $("score").textContent = "-";
+      $("result").textContent = "-";
+      $("letters").textContent = "-";
+      $("feedback").textContent = "-";
+      updateUI();
+    };
+
     $("btnHFStop").onclick = () => {
       state.handsFreeActive = false;
       cleanupMic();
@@ -576,6 +625,9 @@ data:
     };
 
     updateUI();
+
+    // Update word count when textarea changes
+    $("wordsBox").addEventListener('input', updateUI);
 ---
 apiVersion: apps/v1
 kind: Deployment
