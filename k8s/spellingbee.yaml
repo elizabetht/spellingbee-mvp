@@ -73,15 +73,19 @@ spec:
               value: "http://vllm-nemotron-vl:5566/v1"
             - name: VLLM_VL_MODEL
               value: "nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-FP8"
+            - name: MAGPIE_TTS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: magpie-tts-key
+                  key: api-key
+            - name: MAGPIE_TTS_VOICE
+              value: "Magpie-Multilingual.EN-US.Sofia"
             - name: ELEVENLABS_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: elevenlabs-key
                   key: api-key
-            - name: ELEVENLABS_VOICE_ID
-              value: "21m00Tcm4TlvDq8ikWAM"
-            - name: ELEVENLABS_MODEL_ID
-              value: "eleven_flash_v2_5"
+                  optional: true
           ports:
             - containerPort: 8080
           readinessProbe:

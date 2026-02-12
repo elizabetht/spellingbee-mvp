@@ -34,7 +34,7 @@ async function speak(text) {
     currentAudio = audio;
     audio.play();
   } catch (e) {
-    console.warn("ElevenLabs TTS failed, falling back to browser:", e);
+    console.warn("Server TTS failed, falling back to browser:", e);
     if ("speechSynthesis" in window) {
       window.speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(text);
@@ -66,7 +66,7 @@ function speakAndWait(text) {
       audio.play();
       setTimeout(finish, Math.max(text.length * 150, 8000));
     } catch (e) {
-      console.warn("ElevenLabs TTS failed, falling back to browser:", e);
+      console.warn("Server TTS failed, falling back to browser:", e);
       if ("speechSynthesis" in window) {
         window.speechSynthesis.cancel();
         const u = new SpeechSynthesisUtterance(text);

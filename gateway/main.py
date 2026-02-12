@@ -6,7 +6,11 @@ import time
 import uuid
 from typing import Dict, List, Optional, Tuple
 
+import io
+import wave
+
 import requests
+import riva.client
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
@@ -25,9 +29,17 @@ VLLM_VL_MODEL = os.getenv("VLLM_VL_MODEL", "nvidia/NVIDIA-Nemotron-Nano-12B-v2-V
 # Optional: later plug in an ASR service here (Nemotron Speech or anything).
 ASR_TIMEOUT_S = float(os.getenv("ASR_TIMEOUT_S", "30"))
 
-# ElevenLabs TTS
+# NVIDIA Magpie TTS (via Riva gRPC)
+MAGPIE_TTS_URL = os.getenv("MAGPIE_TTS_URL", "grpc.nvcf.nvidia.com:443")
+MAGPIE_TTS_FUNCTION_ID = os.getenv("MAGPIE_TTS_FUNCTION_ID", "877104f7-e885-42b9-8de8-f6e4c6303969")
+MAGPIE_TTS_API_KEY = os.getenv("MAGPIE_TTS_API_KEY", "")
+MAGPIE_TTS_VOICE = os.getenv("MAGPIE_TTS_VOICE", "Magpie-Multilingual.EN-US.Sofia")
+MAGPIE_TTS_LANGUAGE = os.getenv("MAGPIE_TTS_LANGUAGE", "en-US")
+MAGPIE_TTS_USE_SSL = os.getenv("MAGPIE_TTS_USE_SSL", "true").lower() == "true"
+
+# ElevenLabs TTS (legacy fallback)
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
-ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")  # Rachel
+ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")
 ELEVENLABS_MODEL_ID = os.getenv("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5")
 
 # Behavior
@@ -329,30 +341,75 @@ class TTSRequest(BaseModel):
     text: str
 
 
-@app.post("/tts")
-async def tts(req: TTSRequest):
-    """Convert text to speech via ElevenLabs API, return audio bytes."""
-    if not ELEVENLABS_API_KEY:
-        raise HTTPException(status_code=501, detail="ELEVENLABS_API_KEY not configured")
-    if not req.text.strip():
-        raise HTTPException(status_code=400, detail="Empty text")
+def _magpie_tts(text: str) -> bytes:
+    """Synthesize speech using NVIDIA Magpie TTS via Riva gRPC."""
+    metadata = [
+        ("function-id", MAGPIE_TTS_FUNCTION_ID),
+        ("authorization", f"Bearer {MAGPIE_TTS_API_KEY}"),
+    ]
+    auth = riva.client.Auth(
+        ssl_cert=None,
+        use_ssl=MAGPIE_TTS_USE_SSL,
+        uri=MAGPIE_TTS_URL,
+        metadata_args=metadata,
+    )
+    tts_service = riva.client.SpeechSynthesisService(auth)
+    resp = tts_service.synthesize(
+        text,
+        voice_name=MAGPIE_TTS_VOICE,
+        language_code=MAGPIE_TTS_LANGUAGE,
+        encoding=riva.client.AudioEncoding.LINEAR_PCM,
+        sample_rate_hz=22050,
+    )
+    # Convert raw PCM to WAV for browser playback
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)  # 16-bit
+        wf.setframerate(22050)
+        wf.writeframes(resp.audio)
+    return buf.getvalue()
 
+
+def _elevenlabs_tts(text: str) -> bytes:
+    """Synthesize speech using ElevenLabs API (fallback)."""
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
     headers = {
         "xi-api-key": ELEVENLABS_API_KEY,
         "Content-Type": "application/json",
     }
     body = {
-        "text": req.text,
+        "text": text,
         "model_id": ELEVENLABS_MODEL_ID,
     }
-    try:
-        r = requests.post(url, json=body, headers=headers, params={"output_format": "mp3_22050_32"}, timeout=15)
-        r.raise_for_status()
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"ElevenLabs TTS failed: {e}")
+    r = requests.post(url, json=body, headers=headers, params={"output_format": "mp3_22050_32"}, timeout=15)
+    r.raise_for_status()
+    return r.content
 
-    return Response(content=r.content, media_type="audio/mpeg")
+
+@app.post("/tts")
+async def tts(req: TTSRequest):
+    """Convert text to speech. Tries Magpie TTS first, falls back to ElevenLabs."""
+    if not req.text.strip():
+        raise HTTPException(status_code=400, detail="Empty text")
+
+    # Try Magpie TTS first
+    if MAGPIE_TTS_API_KEY:
+        try:
+            audio = _magpie_tts(req.text)
+            return Response(content=audio, media_type="audio/wav")
+        except Exception as e:
+            print(f"[TTS] Magpie TTS failed, trying ElevenLabs fallback: {e}")
+
+    # Fall back to ElevenLabs
+    if ELEVENLABS_API_KEY:
+        try:
+            audio = _elevenlabs_tts(req.text)
+            return Response(content=audio, media_type="audio/mpeg")
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"ElevenLabs TTS failed: {e}")
+
+    raise HTTPException(status_code=501, detail="No TTS provider configured (set MAGPIE_TTS_API_KEY or ELEVENLABS_API_KEY)")
 
 
 @app.post("/extract_words", response_model=ExtractWordsResponse)
