@@ -630,8 +630,8 @@ spec:
         kubernetes.io/hostname: controller
       containers:
         - name: gateway
-          image: localhost:32000/spellingbee-gateway:0.1
-          imagePullPolicy: IfNotPresent
+          image: localhost:32000/spellingbee-gateway:0.2
+          imagePullPolicy: Always
           env:
             - name: VLLM_TEXT_BASE
               value: "http://vllm-llama-31-8b:8000/v1"
