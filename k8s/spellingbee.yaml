@@ -54,6 +54,23 @@ data:
         .ok { color: #0a7; font-weight: 600; }
         .bad { color: #c30; font-weight: 600; }
         .hint { color: #666; }
+        
+        /* Letter diff tiles */
+        #letterDiff { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+        .letter-tile {
+          display: inline-block;
+          padding: 12px 16px;
+          font-size: 1.5em;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+          font-weight: 600;
+          border-radius: 8px;
+          min-width: 40px;
+          text-align: center;
+        }
+        .letter-correct { background: #d4edda; color: #155724; border: 2px solid #28a745; }
+        .letter-wrong { background: #f8d7da; color: #721c24; border: 2px solid #dc3545; }
+        .letter-missing { background: #e2e3e5; color: #6c757d; border: 2px solid #6c757d; opacity: 0.7; }
+        .letter-extra { background: #f8d7da; color: #721c24; border: 2px solid #dc3545; text-decoration: line-through; }
       </style>
     </head>
     <body>
@@ -117,6 +134,7 @@ data:
         <input id="transcript" type="text" placeholder="(Optional) If ASR not configured, paste transcript here." />
 
         <p><b>Result:</b> <span id="result">-</span></p>
+        <div id="letterDiff"></div>
         <p><b>Parsed letters:</b> <span id="letters" class="mono">-</span></p>
         <p><b>Feedback:</b> <span id="feedback">-</span></p>
         <div class="row">
@@ -242,6 +260,29 @@ data:
       if (el) el.textContent = text || "...";
     }
 
+    function renderLetterDiff(letterDiff) {
+      const container = $("letterDiff");
+      if (!container) return;
+      
+      // Clear previous content
+      container.innerHTML = "";
+      
+      // If no diff data, hide the container
+      if (!letterDiff || letterDiff.length === 0) {
+        container.style.display = "none";
+        return;
+      }
+      
+      // Show and populate the container
+      container.style.display = "flex";
+      letterDiff.forEach(item => {
+        const tile = document.createElement("span");
+        tile.className = `letter-tile letter-${item.status}`;
+        tile.textContent = item.letter.toUpperCase();
+        container.appendChild(tile);
+      });
+    }
+
     function updateUI() {
       $("progress").textContent = state.sessionId ? `${state.idx+1} / ${state.total}` : "-";
       $("word").textContent = state.word || "-";
@@ -359,6 +400,7 @@ data:
         $("result").innerHTML = data.correct
           ? '<span class="ok">Correct!</span>'
           : '<span class="bad">Incorrect</span>';
+        renderLetterDiff(data.letter_diff);
         $("letters").textContent = data.letters || "";
         $("feedback").textContent = data.feedback_text || "";
         $("score").textContent = data.score_correct + " / " + data.score_total;
@@ -417,6 +459,7 @@ data:
         state.total = data.total;
         $("score").textContent = "0 / 0";
         $("result").textContent = "-";
+        renderLetterDiff(null);
         $("letters").textContent = "-";
         $("feedback").textContent = "-";
         await ask();
@@ -542,6 +585,7 @@ data:
         const data = await api("/turn/answer", { method: "POST", body: fd });
 
         $("result").innerHTML = data.correct ? '<span class="ok">Correct</span>' : '<span class="bad">Incorrect</span>';
+        renderLetterDiff(data.letter_diff);
         $("letters").textContent = data.letters || "(none)";
         $("feedback").textContent = data.feedback_text || "";
         $("btnSpeakFeedback").disabled = !data.feedback_text;

@@ -4,7 +4,7 @@ import os
 import re
 import time
 import uuid
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Literal
 
 import requests
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -207,6 +207,39 @@ def parse_letters_with_llm(transcript: str) -> Tuple[List[str], str]:
                 out.append(x)
     return out, conf
 
+def compute_letter_diff(spelled: str, target: str) -> List[Dict[str, str]]:
+    """
+    Compute letter-by-letter diff between spelled and target words.
+    Returns a list of {letter, status} where status is:
+    - "correct": letter matches at this position
+    - "wrong": letter doesn't match at this position
+    - "missing": letter in target but not in spelled (child skipped it)
+    - "extra": letter in spelled but not in target (child added extra)
+    """
+    diff = []
+    spelled_list = list(spelled)
+    target_list = list(target)
+    
+    # Compare position by position up to the length of the shorter word
+    min_len = min(len(spelled_list), len(target_list))
+    for i in range(min_len):
+        if spelled_list[i] == target_list[i]:
+            diff.append({"letter": spelled_list[i], "status": "correct"})
+        else:
+            diff.append({"letter": spelled_list[i], "status": "wrong"})
+    
+    # Handle extra letters (spelled is longer than target)
+    if len(spelled_list) > len(target_list):
+        for i in range(len(target_list), len(spelled_list)):
+            diff.append({"letter": spelled_list[i], "status": "extra"})
+    
+    # Handle missing letters (target is longer than spelled)
+    if len(target_list) > len(spelled_list):
+        for i in range(len(spelled_list), len(target_list)):
+            diff.append({"letter": target_list[i], "status": "missing"})
+    
+    return diff
+
 def extract_words_with_vl(image_bytes: bytes, content_type: str) -> List[str]:
     """
     Uses Nemotron VL via vLLM OpenAI /chat/completions with an image_url (data URL).
@@ -288,6 +321,10 @@ class AskResponse(BaseModel):
     word: str
     prompt_text: str
 
+class LetterDiff(BaseModel):
+    letter: str
+    status: Literal["correct", "wrong", "missing", "extra"]
+
 class AnswerResponse(BaseModel):
     session_id: str
     idx: int
@@ -301,6 +338,7 @@ class AnswerResponse(BaseModel):
     done: bool
     score_correct: int
     score_total: int
+    letter_diff: Optional[List[LetterDiff]] = None
 
 # ---------- Routes ----------
 @app.get("/healthz")
@@ -415,6 +453,7 @@ async def turn_answer(
             "done": True,
             "score_correct": s["score_correct"],
             "score_total": s["score_total"],
+            "letter_diff": None,
         }
 
     target = words[idx]
@@ -461,6 +500,11 @@ async def turn_answer(
     feedback = ""
     next_idx = idx
 
+    # Compute letter diff for incorrect answers
+    letter_diff = None
+    if not correct:
+        letter_diff = compute_letter_diff(spelled_norm, target_norm)
+
     if correct:
         next_idx = idx + 1
         s["idx"] = next_idx
@@ -494,4 +538,5 @@ async def turn_answer(
         "done": done,
         "score_correct": s["score_correct"],
         "score_total": s["score_total"],
+        "letter_diff": letter_diff,
     }
