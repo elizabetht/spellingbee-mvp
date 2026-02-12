@@ -352,6 +352,9 @@ class AnswerResponse(BaseModel):
     score_total: int
     wrong_words: List[str] = []
 
+class RandomWordsResponse(BaseModel):
+    words: List[str]
+
 class WordContextRequest(BaseModel):
     word: str
     session_id: str
@@ -495,6 +498,51 @@ async def tts(req: TTSRequest):
             raise HTTPException(status_code=502, detail=f"ElevenLabs TTS failed: {e}")
 
     raise HTTPException(status_code=501, detail="No TTS provider configured (set MAGPIE_TTS_API_KEY or ELEVENLABS_API_KEY)")
+
+
+@app.post("/words/random", response_model=RandomWordsResponse)
+def random_words():
+    """Generate 25 random age-appropriate spelling words using the text LLM."""
+    import random as _rand
+    seed = _rand.randint(1, 100000)
+    system = (
+        "You are a spelling bee word generator for a 9-year-old child. "
+        "Generate exactly 25 unique English words suitable for a 3rd-5th grade spelling bee. "
+        "Rules:\n"
+        "- Mix easy, medium, and hard words (roughly 8 easy, 10 medium, 7 hard).\n"
+        "- Include a variety of word types and topics.\n"
+        "- No offensive, violent, or inappropriate words.\n"
+        "- Each word should be a single word (no spaces, no hyphens).\n"
+        '- Output a JSON object only: {"words":["word1","word2",...]}\n'
+        "- No markdown, no extra keys, no commentary.\n"
+    )
+    user = f"Generate 25 random spelling bee words. Use seed {seed} for variety."
+
+    try:
+        content = vllm_chat(
+            VLLM_TEXT_BASE,
+            VLLM_TEXT_MODEL,
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            temperature=0.9,
+            max_tokens=300,
+            timeout=10,
+        )
+        obj = extract_json_object(content) or {}
+        words = obj.get("words", [])
+        # Clean up: lowercase, strip, unique, alphabetical only
+        seen = set()
+        clean = []
+        for w in words:
+            w = w.strip().lower()
+            if w and w.isalpha() and w not in seen:
+                seen.add(w)
+                clean.append(w)
+        if len(clean) < 5:
+            raise ValueError(f"LLM returned too few valid words: {clean}")
+        return {"words": clean[:25]}
+    except Exception as e:
+        print(f"[RandomWords] LLM failed: {e}")
+        raise HTTPException(status_code=502, detail=f"Failed to generate random words: {e}")
 
 
 @app.post("/extract_words", response_model=ExtractWordsResponse)

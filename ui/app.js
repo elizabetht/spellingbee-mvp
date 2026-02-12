@@ -164,7 +164,7 @@ function setLiveTranscript(text) {
   $("liveTranscript").textContent = text || "";
 }
 
-function showResult(correct, letters, feedbackText) {
+function showResult(correct, letters, feedbackText, word) {
   const area = $("resultArea");
   area.classList.remove("hidden");
   const badge = $("resultBadge");
@@ -175,8 +175,10 @@ function showResult(correct, letters, feedbackText) {
     badge.textContent = "\u274C Incorrect";
     badge.className = "result-badge bad";
   }
-  $("resultLetters").textContent = letters ? letters.split("").join(" ").toUpperCase() : "";
-  $("feedback").textContent = feedbackText || "";
+  // Show the whole word (not letter-by-letter) so the child sees it clearly
+  $("resultLetters").textContent = (word || letters || "").toUpperCase();
+  // Don't show the spelled-out TTS feedback visually (it has "..." pauses for speech)
+  $("feedback").textContent = "";
 }
 
 function hideResult() {
@@ -301,7 +303,8 @@ async function handsFreeLoop() {
   const wantsSentence = sentencePattern.test(tx);
   const wantsDef = defPattern.test(tx);
   if (wantsSentence || wantsDef) {
-    setRing("idle", "\u{1F4D6}", "Getting definition\u2026");
+    setLiveTranscript("");
+    setRing("idle", "\u{1F4D6}", wantsSentence ? "Sentence usage\u2026" : "Getting definition\u2026");
     try {
       const ctx = await api("/word/context", {
         method: "POST",
@@ -350,7 +353,7 @@ async function handsFreeLoop() {
     const data = await api("/turn/answer", { method: "POST", body: fd });
 
     $("score").textContent = data.score_correct + " / " + data.score_total;
-    showResult(data.correct, data.letters, data.feedback_text);
+    showResult(data.correct, data.letters, data.feedback_text, state.word);
     setRing(data.correct ? "correct" : "wrong", data.correct ? "\u2705" : "\u274C", "");
     setLiveTranscript("");
 
@@ -465,11 +468,22 @@ $("btnExtract").onclick = async () => {
   }
 };
 
-// Demo list
-$("btnDemoList").onclick = () => {
-  $("wordsBox").value = ["rhythm", "necessary", "accommodate", "beautiful", "calendar"].join("\n");
-  $("extractStatus").textContent = "Demo list loaded.";
-  showWordEditor();
+// Random word list via LLM
+$("btnRandomList").onclick = async () => {
+  $("btnRandomList").disabled = true;
+  $("extractStatus").textContent = "Generating random words\u2026";
+  $("extractStatus").classList.remove("err");
+  try {
+    const data = await api("/words/random", { method: "POST" });
+    $("wordsBox").value = data.words.join("\n");
+    $("extractStatus").textContent = `${data.words.length} random words loaded.`;
+    showWordEditor();
+  } catch (e) {
+    $("extractStatus").textContent = "Failed to generate words: " + e.message;
+    $("extractStatus").classList.add("err");
+  } finally {
+    $("btnRandomList").disabled = false;
+  }
 };
 
 function showWordEditor() {
