@@ -264,17 +264,32 @@ def extract_words_with_vl(image_bytes: bytes, content_type: str) -> List[str]:
         ],
     }
 
-    content = vllm_chat(
-        VLLM_VL_BASE,
-        VLLM_VL_MODEL,
-        messages=[{"role":"system","content":system}, user_msg],
-        temperature=0.0,
-        max_tokens=400,
-    )
-    obj = extract_json_object(content)
+    content = ""
     words = []
-    if obj and isinstance(obj.get("words"), list):
-        words = [normalize_word(w) for w in obj["words"] if normalize_word(w)]
+
+    # Retry up to 2 times (VL model can sometimes return bad output)
+    for attempt in range(2):
+        try:
+            content = vllm_chat(
+                VLLM_VL_BASE,
+                VLLM_VL_MODEL,
+                messages=[{"role":"system","content":system}, user_msg],
+                temperature=0.0,
+                max_tokens=800,
+            )
+        except Exception as e:
+            print(f"[ExtractWords] vLLM call failed (attempt {attempt+1}): {e}")
+            if attempt == 0:
+                continue
+            raise
+
+        print(f"[ExtractWords] VL response (attempt {attempt+1}): {content[:500]}")
+        obj = extract_json_object(content)
+        if obj and isinstance(obj.get("words"), list):
+            words = [normalize_word(w) for w in obj["words"] if normalize_word(w)]
+        if words:
+            break
+        print(f"[ExtractWords] No words parsed from response, attempt {attempt+1}")
 
     seen = set()
     out = []

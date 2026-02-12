@@ -362,7 +362,7 @@ async function ask() {
 /* ── Event Handlers ───────────────────────────────────── */
 
 // Resize image client-side to reduce VL processing time
-function resizeImage(file, maxDim = 1024) {
+function resizeImage(file, maxDim = 1536) {
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
@@ -378,7 +378,7 @@ function resizeImage(file, maxDim = 1024) {
       canvas.width = width;
       canvas.height = height;
       canvas.getContext("2d").drawImage(img, 0, 0, width, height);
-      canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.85);
+      canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.92);
     };
     img.src = URL.createObjectURL(file);
   });
