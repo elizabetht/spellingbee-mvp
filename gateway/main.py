@@ -142,7 +142,7 @@ def extract_json_object(text: str) -> Optional[dict]:
         start = text.find("{", start + 1)
     return None
 
-def vllm_chat(base_url: str, model: str, messages: list, temperature: float = 0.0, max_tokens: int = 512) -> str:
+def vllm_chat(base_url: str, model: str, messages: list, temperature: float = 0.0, max_tokens: int = 512, timeout: float = 60) -> str:
     url = f"{base_url}/chat/completions"
     payload = {
         "model": model,
@@ -150,7 +150,7 @@ def vllm_chat(base_url: str, model: str, messages: list, temperature: float = 0.
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
-    r = requests.post(url, json=payload, timeout=60)
+    r = requests.post(url, json=payload, timeout=timeout)
     if r.status_code != 200:
         raise HTTPException(status_code=502, detail=f"vLLM error {r.status_code}: {r.text[:500]}")
     data = r.json()
@@ -356,7 +356,12 @@ def _generate_word_context(session: dict, word: str) -> dict:
     """
     Generate a child-friendly definition and example sentence for a word.
     Results are cached in the session to avoid redundant LLM calls.
+    Skips entirely if a previous call already failed (avoids repeated timeouts).
     """
+    # If the LLM already failed once this session, don't keep trying
+    if session.get("_context_unavailable"):
+        return {"definition": "", "sentence": ""}
+
     cache = session.setdefault("word_context", {})
     if word in cache:
         return cache[word]
@@ -380,6 +385,7 @@ def _generate_word_context(session: dict, word: str) -> dict:
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
             temperature=0.0,
             max_tokens=150,
+            timeout=3,
         )
         obj = extract_json_object(content) or {}
         result = {
@@ -387,6 +393,7 @@ def _generate_word_context(session: dict, word: str) -> dict:
             "sentence": (obj.get("sentence") or "").strip(),
         }
     except Exception:
+        session["_context_unavailable"] = True  # stop trying for this session
         result = {"definition": "", "sentence": ""}
 
     cache[word] = result
@@ -518,10 +525,14 @@ def turn_ask(session_id: str = Form(...)):
 
     word = words[idx]
 
-    # Generate definition + example sentence (cached per session)
-    ctx = _generate_word_context(s, word)
-    definition = ctx.get("definition", "")
-    sentence = ctx.get("sentence", "")
+    # Generate definition + example sentence (cached per session, best-effort)
+    try:
+        ctx = _generate_word_context(s, word)
+        definition = ctx.get("definition", "")
+        sentence = ctx.get("sentence", "")
+    except Exception:
+        definition = ""
+        sentence = ""
 
     # Build prompt with context
     if definition:
