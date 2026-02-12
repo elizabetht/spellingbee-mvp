@@ -45,7 +45,11 @@ build_and_push() {
 
   # Update the k8s manifest with the new tag
   # Match the image line for this component regardless of current tag
-  sed -i '' "s|${REGISTRY}/${IMG[$comp]}:[^ ]*|${image}|g" "${ROOT}/k8s/spellingbee.yaml"
+  if [[ "$(uname)" == "Darwin" ]]; then
+    sed -i '' "s|${REGISTRY}/${IMG[$comp]}:[^ ]*|${image}|g" "${ROOT}/k8s/spellingbee.yaml"
+  else
+    sed -i "s|${REGISTRY}/${IMG[$comp]}:[^ ]*|${image}|g" "${ROOT}/k8s/spellingbee.yaml"
+  fi
   blue "  ✓ Updated k8s/spellingbee.yaml → ${image}"
 
   echo "${comp}"
