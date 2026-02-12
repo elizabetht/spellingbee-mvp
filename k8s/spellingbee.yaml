@@ -455,6 +455,8 @@ metadata:
   namespace: spellingbee
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels: { app: vllm-llama-31-8b }
   template:
@@ -524,6 +526,8 @@ metadata:
   namespace: spellingbee
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels: { app: vllm-nemotron-vl }
   template:
