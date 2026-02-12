@@ -389,6 +389,43 @@ def turn_ask(session_id: str = Form(...)):
     prompt_text = f"Spell {word}. Say one letter at a time."
     return {"session_id": session_id, "idx": idx, "word": word, "prompt_text": prompt_text}
 
+class SentenceResponse(BaseModel):
+    sentence: str
+
+
+@app.post("/turn/sentence", response_model=SentenceResponse)
+def turn_sentence(session_id: str = Form(...)):
+    """Generate a sentence using the current word."""
+    s = SESSIONS.get(session_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="Unknown session_id")
+    
+    idx = s["idx"]
+    words = s["words"]
+    if idx >= len(words):
+        raise HTTPException(status_code=409, detail="Session already complete")
+    
+    word = words[idx]
+    
+    # Use Nemotron text LLM to generate a sentence
+    system = "You are a helpful assistant that creates example sentences for spelling practice."
+    user = f"Use the word '{word}' in a simple sentence suitable for a 9-year-old. Output only the sentence, nothing else."
+    
+    try:
+        sentence = vllm_chat(
+            VLLM_TEXT_BASE,
+            VLLM_TEXT_MODEL,
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            temperature=0.7,
+            max_tokens=100,
+        )
+        # Clean up the sentence (remove quotes if present)
+        sentence = sentence.strip().strip('"').strip("'")
+        return {"sentence": sentence}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to generate sentence: {e}")
+
+
 @app.post("/turn/answer", response_model=AnswerResponse)
 async def turn_answer(
     session_id: str = Form(...),

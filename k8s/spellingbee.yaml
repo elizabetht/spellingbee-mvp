@@ -83,6 +83,12 @@ data:
         <p><b>Progress:</b> <span id="progress">-</span> &nbsp; <b>Score:</b> <span id="score">-</span></p>
         <p><b>Word:</b> <span id="word" class="mono">-</span></p>
         <p><b>Prompt:</b> <span id="prompt">-</span></p>
+        
+        <h3>Spelling Bee Helper Buttons</h3>
+        <div class="row">
+          <button id="btnRepeatWord" disabled style="font-size: 1.1em; padding: 12px 18px;">🔊 Repeat the word</button>
+          <button id="btnUseSentence" disabled style="font-size: 1.1em; padding: 12px 18px;">📝 Use it in a sentence</button>
+        </div>
         <hr/>
         <p><label><input id="handsFree" type="checkbox" /> <b>Hands-Free Mode</b> — auto-listen, check &amp; advance</label></p>
         <div id="hfStatus" style="display:none; padding:10px; border-radius:8px; background:#f0f9f4; margin-top:8px;">
@@ -247,6 +253,8 @@ data:
       $("word").textContent = state.word || "-";
       $("prompt").textContent = state.prompt || "-";
       $("btnSpeakPrompt").disabled = !state.prompt;
+      $("btnRepeatWord").disabled = !state.sessionId;
+      $("btnUseSentence").disabled = !state.sessionId;
       $("btnRecStart").disabled = !state.sessionId || state.handsFreeActive;
       $("btnLiveStart").disabled = !state.sessionId || !$("useLiveStt").checked;
       const hf = $("hfStatus");
@@ -443,6 +451,29 @@ data:
     }
 
     $("btnSpeakPrompt").onclick = () => speak(state.prompt);
+
+    // Repeat the word button
+    $("btnRepeatWord").onclick = () => {
+      if (state.word) {
+        speak(state.word);
+      }
+    };
+
+    // Use it in a sentence button
+    $("btnUseSentence").onclick = async () => {
+      if (!state.sessionId) return;
+      try {
+        const fd = new FormData();
+        fd.append("session_id", state.sessionId);
+        const data = await api("/turn/sentence", { method: "POST", body: fd });
+        if (data.sentence) {
+          // Speak the sentence but do NOT display it
+          speak(data.sentence);
+        }
+      } catch (e) {
+        alert("Failed to generate sentence: " + e.message);
+      }
+    };
 
     // 3) Record audio (manual mode)
     $("btnRecStart").onclick = async () => {
