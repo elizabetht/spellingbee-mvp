@@ -57,12 +57,20 @@ build_and_push() {
 
 rollout_restart() {
   local comp="$1"
+  # Check if the deployment exists before restarting
+  if ! ${KUBECTL} get "deployment/${DEP[$comp]}" -n "${NAMESPACE}" &>/dev/null; then
+    red "  ⚠ deployment/${DEP[$comp]} not found in cluster — skipping restart"
+    return 0
+  fi
   blue "▶ Restarting deployment/${DEP[$comp]}"
   ${KUBECTL} rollout restart "deployment/${DEP[$comp]}" -n "${NAMESPACE}"
 }
 
 wait_for_rollout() {
   local comp="$1"
+  if ! ${KUBECTL} get "deployment/${DEP[$comp]}" -n "${NAMESPACE}" &>/dev/null; then
+    return 0
+  fi
   blue "▶ Waiting for deployment/${DEP[$comp]}..."
   ${KUBECTL} rollout status "deployment/${DEP[$comp]}" -n "${NAMESPACE}" --timeout=120s
   green "  ✓ ${DEP[$comp]} is ready"
