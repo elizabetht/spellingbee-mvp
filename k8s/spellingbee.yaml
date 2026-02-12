@@ -267,14 +267,16 @@ data:
       $("sessionReady").style.display = isActive ? "none" : "block";
       $("sessionActive").style.display = isActive ? "block" : "none";
       
-      // Update word count message
-      const words = wordsFromBox();
-      const wordCountMsg = $("wordCountMsg");
-      if (words.length > 0) {
-        wordCountMsg.textContent = `✓ ${words.length} word${words.length !== 1 ? 's' : ''} loaded!`;
-        wordCountMsg.style.display = "block";
-      } else {
-        wordCountMsg.style.display = "none";
+      // Update word count message (only when session is not active)
+      if (!isActive) {
+        const words = wordsFromBox();
+        const wordCountMsg = $("wordCountMsg");
+        if (words.length > 0) {
+          wordCountMsg.textContent = `✓ ${words.length} word${words.length !== 1 ? 's' : ''} loaded!`;
+          wordCountMsg.style.display = "block";
+        } else {
+          wordCountMsg.style.display = "none";
+        }
       }
     }
 
