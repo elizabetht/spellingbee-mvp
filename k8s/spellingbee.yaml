@@ -86,8 +86,8 @@ data:
         <hr/>
         <p><label><input id="handsFree" type="checkbox" /> <b>Hands-Free Mode</b> — auto-listen, check &amp; advance</label></p>
         <div id="hfStatus" style="display:none; padding:10px; border-radius:8px; background:#f0f9f4; margin-top:8px;">
-          <canvas id="audioMeter" width="280" height="18" style="border:1px solid #ddd; border-radius:4px; display:block; margin-bottom:6px;"></canvas>
           <p id="hfText" style="margin:4px 0; font-weight:600;">Ready</p>
+          <div id="liveTranscript" style="font-size:1.3em; font-family:monospace; min-height:36px; padding:8px; background:#fff; border:2px solid #0a7; border-radius:8px; margin:8px 0; color:#333;"></div>
           <button id="btnHFStop" style="background:#c30; color:#fff; border-color:#c30;">Stop Hands-Free</button>
         </div>
       </div>
@@ -237,14 +237,9 @@ data:
       if (el) el.textContent = msg;
     }
 
-    function drawMeter(level) {
-      const c = $("audioMeter");
-      if (!c) return;
-      const ctx = c.getContext("2d");
-      ctx.clearRect(0, 0, c.width, c.height);
-      const w = Math.min(level * c.width / 100, c.width);
-      ctx.fillStyle = level > 5 ? "#0a7" : "#ccc";
-      ctx.fillRect(0, 0, w, c.height);
+    function setLiveTranscript(text) {
+      const el = $("liveTranscript");
+      if (el) el.textContent = text || "...";
     }
 
     function updateUI() {
@@ -269,8 +264,7 @@ data:
         state.audioCtx = null;
       }
       state.mediaRecorder = null;
-      $("btnRecStop").disabled = true;
-      drawMeter(0);
+      $('btnRecStop').disabled = true;
     }
 
     function recordWithVAD() {
@@ -288,29 +282,51 @@ data:
           const chunks = [];
           const mr = new MediaRecorder(stream);
           state.mediaRecorder = mr;
+
+          /* Live transcript via browser SpeechRecognition */
+          let liveRec = null;
+          const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+          if (SR) {
+            liveRec = new SR();
+            liveRec.continuous = true;
+            liveRec.interimResults = true;
+            liveRec.lang = 'en-US';
+            liveRec.onresult = (evt) => {
+              let interim = '', final = '';
+              for (let i = 0; i < evt.results.length; i++) {
+                const r = evt.results[i];
+                if (r.isFinal) final += r[0].transcript;
+                else interim += r[0].transcript;
+              }
+              setLiveTranscript(final + interim || '...');
+            };
+            liveRec.onerror = () => {};
+            try { liveRec.start(); } catch(e) {}
+          }
+          setLiveTranscript('Listening...');
           mr.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
           mr.onstop = () => {
             stopped = true; if (cap) clearTimeout(cap);
+            if (liveRec) try { liveRec.stop(); } catch(e) {}
             cleanupMic();
-            resolve(new Blob(chunks, { type: "audio/webm" }));
+            resolve(new Blob(chunks, { type: 'audio/webm' }));
           };
           mr.start();
-          $("btnRecStop").disabled = false;
+          $('btnRecStop').disabled = false;
           cap = setTimeout(() => {
-            if (!stopped && mr.state !== "inactive") { stopped = true; mr.stop(); }
+            if (!stopped && mr.state !== 'inactive') { stopped = true; mr.stop(); }
           }, 30000);
           (function tick() {
-            if (stopped || mr.state === "inactive") return;
+            if (stopped || mr.state === 'inactive') return;
             analyser.getByteTimeDomainData(buf);
             let s = 0;
             for (let i = 0; i < buf.length; i++) { const v=(buf[i]-128)/128; s+=v*v; }
             const rms = Math.sqrt(s / buf.length) * 100;
-            drawMeter(rms);
             if (rms > 3) { sp++; sil = 0; }
             else if (sp > 15) { sil++; }
             if (sil > 50 && sp > 15) {
               stopped = true; clearTimeout(cap);
-              setHFStatus("Processing...");
+              setHFStatus('Processing...');
               mr.stop(); return;
             }
             requestAnimationFrame(tick);
