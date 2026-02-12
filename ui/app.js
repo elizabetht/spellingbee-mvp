@@ -120,6 +120,24 @@ function updateUI() {
   $("btnLiveStart").disabled = !state.sessionId || !$("useLiveStt").checked;
   const hf = $("hfStatus");
   if (hf) hf.style.display = state.handsFreeActive ? "block" : "none";
+  
+  // Show/hide sections based on session state
+  const isActive = !!state.sessionId;
+  $("setupCard").style.display = isActive ? "none" : "block";
+  $("sessionReady").style.display = isActive ? "none" : "block";
+  $("sessionActive").style.display = isActive ? "block" : "none";
+  
+  // Update word count message (only when session is not active)
+  if (!isActive) {
+    const words = wordsFromBox();
+    const wordCountMsg = $("wordCountMsg");
+    if (words.length > 0) {
+      wordCountMsg.textContent = `✓ ${words.length} word${words.length !== 1 ? 's' : ''} loaded!`;
+      wordCountMsg.style.display = "block";
+    } else {
+      wordCountMsg.style.display = "none";
+    }
+  }
 }
 
 /* -- VAD Recording ----------------------------------------- */
@@ -263,6 +281,7 @@ $("btnExtract").onclick = async () => {
     const data = await api("/extract_words", { method: "POST", body: fd });
     $("wordsBox").value = (data.words || []).join("\n");
     setStatus($("extractStatus"), `Extracted ${data.words.length} words.`);
+    updateUI();
   } catch (e) {
     setStatus($("extractStatus"), "Extraction failed: " + e.message, true);
   }
@@ -271,6 +290,7 @@ $("btnExtract").onclick = async () => {
 $("btnDemoList").onclick = () => {
   $("wordsBox").value = ["rhythm","necessary","accommodate","beautiful","calendar"].join("\n");
   setStatus($("extractStatus"), "Loaded demo list.");
+  updateUI();
 };
 
 // 2) Start session
@@ -436,6 +456,28 @@ $("btnSubmit").onclick = async () => {
 
 $("btnSpeakFeedback").onclick = () => speak($("feedback").textContent);
 
+$("btnEditList").onclick = () => {
+  // End current session
+  state.sessionId = null;
+  state.idx = 0;
+  state.total = 0;
+  state.word = null;
+  state.prompt = null;
+  state.handsFreeActive = false;
+  
+  // Clean up any active recording
+  cleanupMic();
+  if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+  window.speechSynthesis.cancel();
+  
+  // Reset UI
+  $("score").textContent = "-";
+  $("result").textContent = "-";
+  $("letters").textContent = "-";
+  $("feedback").textContent = "-";
+  updateUI();
+};
+
 $("btnHFStop").onclick = () => {
   state.handsFreeActive = false;
   cleanupMic();
@@ -446,3 +488,6 @@ $("btnHFStop").onclick = () => {
 };
 
 updateUI();
+
+// Update word count when textarea changes
+$("wordsBox").addEventListener('input', updateUI);
