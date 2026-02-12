@@ -273,7 +273,7 @@ async function handsFreeLoop() {
       });
       const defText = ctx.definition
         ? `${state.word} means ${ctx.definition}${ctx.sentence ? ". For example: " + ctx.sentence : ""}`
-        : `${state.word}. It's a spelling word.`;
+        : `Sorry, I don't have a definition for ${state.word} right now. Let's keep spelling!`;
       await speakAndWait(defText);
     } catch (e) {
       await speakAndWait(`Sorry, I couldn't get the definition for ${state.word}.`);

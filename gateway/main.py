@@ -358,13 +358,13 @@ def _generate_word_context(session: dict, word: str) -> dict:
     Results are cached in the session to avoid redundant LLM calls.
     Skips entirely if a previous call already failed (avoids repeated timeouts).
     """
-    # If the LLM already failed once this session, don't keep trying
-    if session.get("_context_unavailable"):
-        return {"definition": "", "sentence": ""}
-
     cache = session.setdefault("word_context", {})
     if word in cache:
         return cache[word]
+
+    # Track consecutive failures; give up after 3 in a row
+    if session.get("_context_failures", 0) >= 3:
+        return {"definition": "", "sentence": ""}
 
     system = (
         "You are a helpful spelling bee pronouncer for a 9-year-old child. "
@@ -388,15 +388,23 @@ def _generate_word_context(session: dict, word: str) -> dict:
             timeout=8,
         )
         obj = extract_json_object(content) or {}
-        result = {
-            "definition": (obj.get("definition") or "A spelling word.").strip(),
-            "sentence": (obj.get("sentence") or "").strip(),
-        }
-    except Exception:
-        session["_context_unavailable"] = True  # stop trying for this session
+        defn = (obj.get("definition") or "").strip()
+        sent = (obj.get("sentence") or "").strip()
+        # Reject useless placeholder answers from the LLM
+        if defn.lower() in ("", "a spelling word", "a spelling word.", "it is a spelling word."):
+            defn = ""
+        result = {"definition": defn, "sentence": sent}
+        # Reset failure counter on success
+        if defn:
+            session["_context_failures"] = 0
+    except Exception as exc:
+        print(f"[WordContext] LLM failed for '{word}': {exc}")
+        session["_context_failures"] = session.get("_context_failures", 0) + 1
         result = {"definition": "", "sentence": ""}
 
-    cache[word] = result
+    # Only cache if we got a real definition; allow retries otherwise
+    if result["definition"]:
+        cache[word] = result
     return result
 
 
