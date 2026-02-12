@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Tuple
 import requests
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 APP_NAME = "spellingbee-gateway"
@@ -22,9 +23,12 @@ VLLM_VL_BASE = os.getenv("VLLM_VL_BASE", "http://vllm-nemotron-vl:5566/v1")
 VLLM_VL_MODEL = os.getenv("VLLM_VL_MODEL", "nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16")
 
 # Optional: later plug in an ASR service here (Nemotron Speech or anything).
-ASR_BASE = os.getenv("ASR_BASE", "")  # e.g. http://asr-service:8080
-ASR_ENDPOINT = os.getenv("ASR_ENDPOINT", "/asr")  # POST audio -> {"text":"..."}
 ASR_TIMEOUT_S = float(os.getenv("ASR_TIMEOUT_S", "30"))
+
+# ElevenLabs TTS
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
+ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")  # Rachel
+ELEVENLABS_MODEL_ID = os.getenv("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5")
 
 # Behavior
 MAX_WORDS = int(os.getenv("MAX_WORDS", "200"))
@@ -249,15 +253,20 @@ def extract_words_with_vl(image_bytes: bytes, content_type: str) -> List[str]:
     return out
 
 def asr_transcribe(audio_bytes: bytes, filename: str) -> str:
-    if not ASR_BASE:
-        raise HTTPException(status_code=501, detail="ASR_BASE not configured (set env ASR_BASE or use UI live transcript).")
-    url = f"{ASR_BASE}{ASR_ENDPOINT}"
+    """Transcribe audio using ElevenLabs Scribe v2 API."""
+    if not ELEVENLABS_API_KEY:
+        raise HTTPException(status_code=501, detail="ELEVENLABS_API_KEY not configured (set env or use UI live transcript).")
+    url = "https://api.elevenlabs.io/v1/speech-to-text"
+    headers = {"xi-api-key": ELEVENLABS_API_KEY}
     files = {"file": (filename, audio_bytes)}
-    r = requests.post(url, files=files, timeout=ASR_TIMEOUT_S)
-    if r.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"ASR error {r.status_code}: {r.text[:500]}")
-    data = r.json()
-    return (data.get("text") or "").strip()
+    data = {"model_id": "scribe_v2", "language_code": "en"}
+    try:
+        r = requests.post(url, headers=headers, files=files, data=data, timeout=ASR_TIMEOUT_S)
+        r.raise_for_status()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"ElevenLabs ASR error: {e}")
+    result = r.json()
+    return (result.get("text") or "").strip()
 
 # ---------- API models ----------
 class ExtractWordsResponse(BaseModel):
@@ -297,6 +306,37 @@ class AnswerResponse(BaseModel):
 @app.get("/healthz")
 def healthz():
     return {"ok": True, "ts": now_ms()}
+
+
+class TTSRequest(BaseModel):
+    text: str
+
+
+@app.post("/tts")
+async def tts(req: TTSRequest):
+    """Convert text to speech via ElevenLabs API, return audio bytes."""
+    if not ELEVENLABS_API_KEY:
+        raise HTTPException(status_code=501, detail="ELEVENLABS_API_KEY not configured")
+    if not req.text.strip():
+        raise HTTPException(status_code=400, detail="Empty text")
+
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
+    headers = {
+        "xi-api-key": ELEVENLABS_API_KEY,
+        "Content-Type": "application/json",
+    }
+    body = {
+        "text": req.text,
+        "model_id": ELEVENLABS_MODEL_ID,
+    }
+    try:
+        r = requests.post(url, json=body, headers=headers, params={"output_format": "mp3_22050_32"}, timeout=15)
+        r.raise_for_status()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"ElevenLabs TTS failed: {e}")
+
+    return Response(content=r.content, media_type="audio/mpeg")
+
 
 @app.post("/extract_words", response_model=ExtractWordsResponse)
 async def extract_words(file: UploadFile = File(...)):

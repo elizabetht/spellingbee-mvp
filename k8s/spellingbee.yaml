@@ -146,51 +146,70 @@ data:
       audioCtx: null,
     };
 
-    /* Pick a friendly, natural-sounding voice */
-    let preferredVoice = null;
-    function pickVoice() {
-      const voices = speechSynthesis.getVoices();
-      if (!voices.length) return;
-      const prefs = ['samantha', 'karen', 'google us english', 'google uk english female',
-                     'microsoft zira', 'microsoft aria', 'fiona', 'moira', 'tessa'];
-      for (const p of prefs) {
-        const v = voices.find(v => v.name.toLowerCase().includes(p));
-        if (v) { preferredVoice = v; return; }
-      }
-      const en = voices.find(v => v.lang && v.lang.startsWith('en'));
-      if (en) preferredVoice = en;
-    }
-    if ('speechSynthesis' in window) {
-      speechSynthesis.onvoiceschanged = pickVoice;
-      pickVoice();
-    }
+    /* ── TTS via ElevenLabs (through gateway) ─────────────── */
+    let currentAudio = null;
 
-    function makeUtterance(text) {
-      const u = new SpeechSynthesisUtterance(text);
-      if (preferredVoice) u.voice = preferredVoice;
-      u.rate = 0.9;
-      u.pitch = 1.05;
-      return u;
-    }
-
-    function speak(text) {
+    async function speak(text) {
       if (!text) return;
-      if (!("speechSynthesis" in window)) return;
-      window.speechSynthesis.cancel();
-      window.speechSynthesis.speak(makeUtterance(text));
+      try {
+        if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+        const res = await fetch("/api/tts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        currentAudio = audio;
+        audio.play();
+      } catch (e) {
+        console.warn("ElevenLabs TTS failed, falling back to browser:", e);
+        if ("speechSynthesis" in window) {
+          window.speechSynthesis.cancel();
+          const u = new SpeechSynthesisUtterance(text);
+          u.rate = 0.9;
+          window.speechSynthesis.speak(u);
+        }
+      }
     }
 
     function speakAndWait(text) {
-      return new Promise((resolve) => {
-        if (!text || !("speechSynthesis" in window)) return resolve();
-        window.speechSynthesis.cancel();
-        const u = makeUtterance(text);
-        let done = false;
-        const finish = () => { if (!done) { done = true; resolve(); } };
-        u.onend = finish;
-        u.onerror = finish;
-        window.speechSynthesis.speak(u);
-        setTimeout(finish, Math.max(text.length * 120, 6000));
+      return new Promise(async (resolve) => {
+        if (!text) return resolve();
+        try {
+          if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+          const res = await fetch("/api/tts", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text }),
+          });
+          if (!res.ok) throw new Error(await res.text());
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          const audio = new Audio(url);
+          currentAudio = audio;
+          let done = false;
+          const finish = () => { if (!done) { done = true; URL.revokeObjectURL(url); resolve(); } };
+          audio.onended = finish;
+          audio.onerror = finish;
+          audio.play();
+          setTimeout(finish, Math.max(text.length * 150, 8000));
+        } catch (e) {
+          console.warn("ElevenLabs TTS failed, falling back to browser:", e);
+          if ("speechSynthesis" in window) {
+            window.speechSynthesis.cancel();
+            const u = new SpeechSynthesisUtterance(text);
+            u.rate = 0.9;
+            let done = false;
+            const finish = () => { if (!done) { done = true; resolve(); } };
+            u.onend = finish;
+            u.onerror = finish;
+            window.speechSynthesis.speak(u);
+            setTimeout(finish, Math.max(text.length * 120, 6000));
+          } else { resolve(); }
+        }
       });
     }
 
@@ -534,6 +553,7 @@ data:
     $("btnHFStop").onclick = () => {
       state.handsFreeActive = false;
       cleanupMic();
+      if (currentAudio) { currentAudio.pause(); currentAudio = null; }
       window.speechSynthesis.cancel();
       setHFStatus("Stopped.");
       updateUI();
@@ -621,8 +641,15 @@ spec:
               value: "http://vllm-nemotron-vl:5566/v1"
             - name: VLLM_VL_MODEL
               value: "nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-FP8"
-            - name: ASR_BASE
-              value: "http://spellingbee-asr:8060"
+            - name: ELEVENLABS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: elevenlabs-key
+                  key: api-key
+            - name: ELEVENLABS_VOICE_ID
+              value: "21m00Tcm4TlvDq8ikWAM"
+            - name: ELEVENLABS_MODEL_ID
+              value: "eleven_flash_v2_5"
           ports:
             - containerPort: 8080
           readinessProbe:
@@ -646,59 +673,6 @@ spec:
     - name: http
       port: 8080
       targetPort: 8080
----
-# -----------------------
-# ASR Service (faster-whisper on CPU)
-# -----------------------
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: spellingbee-asr
-  namespace: spellingbee
-spec:
-  replicas: 1
-  selector:
-    matchLabels: { app: spellingbee-asr }
-  template:
-    metadata:
-      labels: { app: spellingbee-asr }
-    spec:
-      nodeSelector:
-        kubernetes.io/hostname: controller
-      containers:
-        - name: asr
-          image: localhost:32000/spellingbee-asr:0.1
-          imagePullPolicy: IfNotPresent
-          ports:
-            - containerPort: 8060
-          resources:
-            requests:
-              cpu: "2"
-              memory: "1Gi"
-            limits:
-              cpu: "4"
-              memory: "2Gi"
-          readinessProbe:
-            httpGet: { path: /healthz, port: 8060 }
-            initialDelaySeconds: 10
-            periodSeconds: 5
-          livenessProbe:
-            httpGet: { path: /healthz, port: 8060 }
-            initialDelaySeconds: 15
-            periodSeconds: 10
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: spellingbee-asr
-  namespace: spellingbee
-spec:
-  type: ClusterIP
-  selector: { app: spellingbee-asr }
-  ports:
-    - name: http
-      port: 8060
-      targetPort: 8060
 
 # -----------------------
 # OPTIONAL: GPU vLLM - Llama 3.1 8B (text)
