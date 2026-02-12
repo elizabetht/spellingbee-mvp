@@ -367,25 +367,25 @@ def _generate_word_context(session: dict, word: str) -> dict:
         return cache[word]
 
     system = (
-        "You are a spelling bee pronouncer for a 9-year-old child. "
-        "Given a word, provide ONLY:\n"
-        "1) A short, child-friendly definition (one sentence)\n"
-        "2) One simple example sentence using the word\n"
-        "Do NOT provide any other content. Do NOT discuss anything outside spelling."
-        "If the word seems inappropriate for a child, just say 'A spelling word.' as the definition "
-        "and 'This is a spelling word.' as the sentence.\n"
-        'Output JSON only: {"definition":"...","sentence":"..."}'
+        "You are a helpful spelling bee pronouncer for a 9-year-old child. "
+        "Given a word, you MUST provide a real, child-friendly definition and an example sentence.\n"
+        "Rules:\n"
+        "- The definition should be one short sentence a child can understand.\n"
+        "- The example sentence should use the word naturally.\n"
+        "- Do NOT say 'a spelling word' — always give a real definition.\n"
+        '- Output JSON only: {"definition":"...","sentence":"..."}\n'
+        "- No markdown, no extra keys, no commentary.\n"
     )
-    user = f'Word: "{word}"'
+    user = f'Give me a simple definition and example sentence for the word "{word}".'
 
     try:
         content = vllm_chat(
             VLLM_TEXT_BASE,
             VLLM_TEXT_MODEL,
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-            temperature=0.0,
+            temperature=0.3,
             max_tokens=150,
-            timeout=3,
+            timeout=8,
         )
         obj = extract_json_object(content) or {}
         result = {
