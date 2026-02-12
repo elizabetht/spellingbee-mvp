@@ -178,15 +178,32 @@ def parse_letters_with_llm(transcript: str) -> Tuple[List[str], str]:
     Use Nemotron text model to convert transcript -> letters JSON.
     """
     system = (
-        "You convert a child's spoken spelling into letters. "
+        "You convert a child's spoken spelling into individual letters. "
+        "The child is spelling a word one letter at a time, but speech recognition "
+        "often garbles individual letters into words. For example:\n"
+        "- 'let e cessary' means the child said N-E-C-E-S-S-A-R-Y\n"
+        "- 'are a see e' means R-A-C-E\n"
+        "- 'bee you tea full' means B-E-A-U-T-I-F-U-L\n"
+        "- 'age a are em' means H-A-R-M\n"
         "Output only valid JSON. No markdown."
     )
     user = (
-        "Extract spelled letters from this transcript.\n"
+        "Extract the individual letters this child was trying to spell from the transcript.\n"
+        "The speech recognizer often converts letter sounds into words:\n"
+        "- Letter sounds like 'en' or 'and' may mean N\n"
+        "- 'are' or 'our' may mean R\n"
+        "- 'see' or 'sea' may mean C\n"
+        "- 'double you' or 'dub' may mean W\n"
+        "- 'why' may mean Y\n"
+        "- 'age' or 'each' may mean H\n"
+        "- 'eye' may mean I\n"
+        "- 'oh' may mean O\n"
+        "- 'you' may mean U\n"
+        "- 'be' or 'bee' may mean B\n"
         "Rules:\n"
         "- Output JSON only: {\"letters\":[\"a\",\"b\"],\"confidence\":\"high|medium|low\"}\n"
         "- letters must be a-z only\n"
-        "- If the child did not spell letters (they said the whole word), return empty letters and confidence low\n"
+        "- If the transcript contains a complete word (not spelled letters), try to extract the individual letters the child likely said\n"
         f"Transcript: {transcript!r}\n"
     )
     content = vllm_chat(
@@ -460,27 +477,51 @@ async def turn_answer(
 
     target = words[idx]
 
-    # 1) Get transcript
-    tx = (transcript or "").strip()
-    if not tx and audio is not None:
+    # 1) Get transcripts from all available sources
+    browser_tx = (transcript or "").strip()
+    asr_tx = ""
+    if audio is not None:
         audio_bytes = await audio.read()
-        if not audio_bytes:
-            raise HTTPException(status_code=400, detail="Empty audio upload")
-        tx = asr_transcribe(audio_bytes, audio.filename or "audio.webm")
+        if audio_bytes:
+            asr_tx = asr_transcribe(audio_bytes, audio.filename or "audio.webm")
 
+    # Pick the primary transcript; keep both for letter extraction
+    tx = browser_tx or asr_tx
     if not tx:
         raise HTTPException(status_code=400, detail="Provide transcript or audio")
 
-    # 2) Parse letters deterministically
-    letters_list = parse_letters_deterministic(tx)
+    # 2) Parse letters from all available transcripts, keep best result
+    candidates = []
 
-    # 3) If parsing looks weak, ask Nemotron text model to extract letters
+    if browser_tx:
+        browser_letters = parse_letters_deterministic(browser_tx)
+        candidates.append(("browser_det", browser_letters))
+    if asr_tx:
+        asr_letters = parse_letters_deterministic(asr_tx)
+        candidates.append(("asr_det", asr_letters))
+
+    # Pick candidate closest to target length (but at least 1 letter)
+    def score_candidate(letters):
+        if not letters:
+            return 9999
+        return abs(len(letters) - len(target))
+
+    candidates.sort(key=lambda c: score_candidate(c[1]))
+    letters_list = candidates[0][1] if candidates else []
+    source = candidates[0][0] if candidates else "none"
+
+    # 3) If deterministic parsing looks weak, try LLM on both transcripts
     used_llm = False
     conf = "n/a"
-    if len(letters_list) < 2 and len(target) >= 2:
+    if len(letters_list) < 2 or abs(len(letters_list) - len(target)) > 2:
+        # Try LLM on the combined/best transcript
+        combined_tx = f"{browser_tx} | {asr_tx}".strip(" |") if (browser_tx and asr_tx) else tx
         try:
-            letters_list, conf = parse_letters_with_llm(tx)
-            used_llm = True
+            llm_letters, conf = parse_letters_with_llm(combined_tx)
+            if len(llm_letters) >= len(letters_list):
+                letters_list = llm_letters
+                used_llm = True
+                source = "llm"
         except Exception:
             pass
 
@@ -526,7 +567,7 @@ async def turn_answer(
         "session_id": session_id,
         "idx": idx,
         "word": target,
-        "transcript": tx + (f" (llm_conf={conf})" if used_llm else ""),
+        "transcript": f"[{source}] browser={browser_tx!r} asr={asr_tx!r}" if (browser_tx and asr_tx) else tx + (f" [{source}]" if used_llm else ""),
         "letters": spelled_norm,
         "correct": correct,
         "attempts_for_word": attempts,
