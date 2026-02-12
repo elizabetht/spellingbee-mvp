@@ -4,8 +4,9 @@ metadata:
   name: spellingbee
 ---
 # -----------------------
-# UI Config (nginx + static files)
+# UI (nginx + static files — built from ui/ directory)
 # -----------------------
+<<<<<<< HEAD
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -621,6 +622,8 @@ data:
 
     updateUI();
 ---
+=======
+>>>>>>> e313342793189b66eb20661866f2bbb8ab73d724
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -638,23 +641,10 @@ spec:
         kubernetes.io/hostname: controller
       containers:
         - name: nginx
-          image: nginx:1.27-alpine
+          image: localhost:32000/spellingbee-ui:0.1
+          imagePullPolicy: Always
           ports:
             - containerPort: 8080
-          volumeMounts:
-            - name: ui
-              mountPath: /usr/share/nginx/html/index.html
-              subPath: index.html
-            - name: ui
-              mountPath: /usr/share/nginx/html/app.js
-              subPath: app.js
-            - name: ui
-              mountPath: /etc/nginx/nginx.conf
-              subPath: nginx.conf
-      volumes:
-        - name: ui
-          configMap:
-            name: spellingbee-ui
 ---
 apiVersion: v1
 kind: Service
@@ -880,4 +870,3 @@ spec:
     - name: http
       port: 5566
       targetPort: 5566
-
