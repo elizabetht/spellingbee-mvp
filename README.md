@@ -93,10 +93,57 @@ If you want to deploy only the gateway+UI first:
 - Use "Use demo list" in the UI
 - Use Chrome Live Transcript or type transcript manually
 
-## 6) Later: add ASR (Nemotron Speech)
-The gateway supports an ASR service:
-- set env `ASR_BASE=http://<asr-service>:<port>`
-- ASR endpoint should accept multipart file `file` and return JSON `{"text":"..."}`
+## 6) Build & deploy ASR service (faster-whisper)
+
+The ASR service runs on CPU (controller node) using `faster-whisper` with the `base.en` Whisper model.
+
+Build + push:
+```bash
+cd asr
+docker build -t localhost:32000/spellingbee-asr:0.1 .
+docker push localhost:32000/spellingbee-asr:0.1
+```
+
+Or use the helper script:
+```bash
+bash scripts/build_push_asr.sh
+```
+
+The ASR Deployment and Service are already included in `k8s/spellingbee.yaml`.
+After building the image, re-apply:
+```bash
+microk8s kubectl apply -f k8s/spellingbee.yaml
+microk8s kubectl -n spellingbee rollout restart deploy/spellingbee-asr
+microk8s kubectl -n spellingbee rollout restart deploy/spellingbee-gateway
+```
+
+Verify:
+```bash
+microk8s kubectl -n spellingbee get pods -o wide
+# spellingbee-asr pod should be Running on controller
+```
+
+## 7) Hands-Free Mode (voice-driven spelling bee)
+
+Inspired by [daily-co/nimble-pipecat](https://github.com/daily-co/nimble-pipecat):
+
+1. Upload a word list image and click **Extract words**
+2. Check **Hands-Free Mode** in the session card
+3. Click **Start**
+4. The app will automatically:
+   - Speak each word prompt (browser TTS)
+   - Listen via microphone with silence detection (VAD)
+   - Send audio to the ASR service for transcription
+   - Check spelling and speak feedback
+   - Advance to the next word
+5. Click **Stop Hands-Free** at any time to pause
+
+### Architecture
+```
+Browser TTS ──► Speaker
+Mic audio ────► ASR (faster-whisper, CPU) ──► Gateway ──► vLLM (letter parsing)
+Image ────────► Gateway ──► Nemotron VL (word extraction)
+```
 
 
 
