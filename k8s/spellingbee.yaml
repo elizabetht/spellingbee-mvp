@@ -94,9 +94,11 @@ data:
 
       <div class="card">
         <h2>3) Answer</h2>
-        <p class="hint">
-          Microphones in browsers usually require HTTPS for non-localhost.
-          If your browser blocks mic on http://NODE_IP:30080, use Chrome flags or run a local port-forward.
+        <p class="hint" id="micHint">
+          <b>Mic not working?</b> Browsers require HTTPS for mic on non-localhost.<br/>
+          Fix: <code>microk8s kubectl -n spellingbee port-forward svc/spellingbee-ui 8080:8080</code><br/>
+          then open <a href="http://localhost:8080">http://localhost:8080</a><br/>
+          Or: Chrome → <code>chrome://flags</code> → "Insecure origins treated as secure" → add your URL.
         </p>
 
         <div class="row">
@@ -144,29 +146,51 @@ data:
       audioCtx: null,
     };
 
+    /* Pick a friendly, natural-sounding voice */
+    let preferredVoice = null;
+    function pickVoice() {
+      const voices = speechSynthesis.getVoices();
+      if (!voices.length) return;
+      const prefs = ['samantha', 'karen', 'google us english', 'google uk english female',
+                     'microsoft zira', 'microsoft aria', 'fiona', 'moira', 'tessa'];
+      for (const p of prefs) {
+        const v = voices.find(v => v.name.toLowerCase().includes(p));
+        if (v) { preferredVoice = v; return; }
+      }
+      const en = voices.find(v => v.lang && v.lang.startsWith('en'));
+      if (en) preferredVoice = en;
+    }
+    if ('speechSynthesis' in window) {
+      speechSynthesis.onvoiceschanged = pickVoice;
+      pickVoice();
+    }
+
+    function makeUtterance(text) {
+      const u = new SpeechSynthesisUtterance(text);
+      if (preferredVoice) u.voice = preferredVoice;
+      u.rate = 0.9;
+      u.pitch = 1.05;
+      return u;
+    }
+
     function speak(text) {
       if (!text) return;
       if (!("speechSynthesis" in window)) return;
       window.speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(text);
-      u.rate = 0.95;
-      u.pitch = 1.0;
-      window.speechSynthesis.speak(u);
+      window.speechSynthesis.speak(makeUtterance(text));
     }
 
     function speakAndWait(text) {
       return new Promise((resolve) => {
         if (!text || !("speechSynthesis" in window)) return resolve();
         window.speechSynthesis.cancel();
-        const u = new SpeechSynthesisUtterance(text);
-        u.rate = 0.95;
-        u.pitch = 1.0;
+        const u = makeUtterance(text);
         let done = false;
         const finish = () => { if (!done) { done = true; resolve(); } };
         u.onend = finish;
         u.onerror = finish;
         window.speechSynthesis.speak(u);
-        setTimeout(finish, Math.max(text.length * 100, 5000));
+        setTimeout(finish, Math.max(text.length * 120, 6000));
       });
     }
 
@@ -391,7 +415,19 @@ data:
       state.chunks = [];
       state.audioBlob = null;
 
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (err) {
+        alert("Microphone access blocked!\n\n" +
+              "Browsers require HTTPS for mic access on non-localhost.\n\n" +
+              "Fix options:\n" +
+              "1) Port-forward: microk8s kubectl -n spellingbee port-forward svc/spellingbee-ui 8080:8080\n" +
+              "   then open http://localhost:8080\n\n" +
+              "2) Chrome flag: chrome://flags → 'Insecure origins treated as secure'\n" +
+              "   → add http://192.168.1.75:30080");
+        return;
+      }
       const mr = new MediaRecorder(stream);
       state.mediaRecorder = mr;
 
