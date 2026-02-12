@@ -12,7 +12,12 @@ const state = {
   handsFreeActive: false,
   micStream: null,
   audioCtx: null,
+  wrongWords: [],
+  wordsCompleted: 0,
+  originalWords: [],
 };
+
+const MIN_WORDS = 25;
 
 /* ── TTS ──────────────────────────────────────────────── */
 let currentAudio = null;
@@ -268,12 +273,42 @@ async function handsFreeLoop() {
     setRing(data.correct ? "correct" : "wrong", data.correct ? "\u2705" : "\u274C", "");
     setLiveTranscript("");
 
+    // Track wrong words (when word is skipped after max retries)
+    if (!data.correct && data.attempts_for_word > 1) {
+      // Word was skipped — add to wrong list if not already there
+      if (data.word && !state.wrongWords.includes(data.word)) {
+        state.wrongWords.push(data.word);
+      }
+    }
+    if (data.correct || data.attempts_for_word > 1) {
+      state.wordsCompleted++;
+    }
+
     await speakAndWait(data.feedback_text);
 
     if (data.done) {
-      $("finalScore").textContent = `${data.score_correct} out of ${data.score_total} correct`;
-      state.handsFreeActive = false;
-      showStage("stageDone");
+      // Merge backend wrong_words list (authoritative)
+      if (data.wrong_words && data.wrong_words.length) {
+        data.wrong_words.forEach(w => {
+          if (!state.wrongWords.includes(w)) state.wrongWords.push(w);
+        });
+      }
+
+      if (state.wrongWords.length > 0) {
+        // Auto-start review round with wrong words
+        $("finalScore").textContent = `${data.score_correct} out of ${data.score_total} correct`;
+        $("wrongWordsMsg").textContent = `Let's practice the ${state.wrongWords.length} word${state.wrongWords.length !== 1 ? "s" : ""} you missed!`;
+        showStage("stageDone");
+        await speakAndWait(`Nice work! Now let's practice the ${state.wrongWords.length} words you missed.`);
+        await new Promise(r => setTimeout(r, 1500));
+        await startReviewRound();
+      } else {
+        $("finalScore").textContent = `${data.score_correct} out of ${data.score_total} correct`;
+        $("wrongWordsMsg").textContent = "You got everything right! \u{1F31F}";
+        state.handsFreeActive = false;
+        showStage("stageDone");
+        await speakAndWait("You got everything right! Amazing!");
+      }
       return;
     }
 
@@ -299,6 +334,29 @@ async function ask() {
 
 /* ── Event Handlers ───────────────────────────────────── */
 
+// Resize image client-side to reduce VL processing time
+function resizeImage(file, maxDim = 1024) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      let { width, height } = img;
+      if (width <= maxDim && height <= maxDim) {
+        resolve(file); // already small enough
+        return;
+      }
+      const scale = maxDim / Math.max(width, height);
+      width = Math.round(width * scale);
+      height = Math.round(height * scale);
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+      canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.85);
+    };
+    img.src = URL.createObjectURL(file);
+  });
+}
+
 // Extract words from image
 $("btnExtract").onclick = async () => {
   const f = $("img").files?.[0];
@@ -307,18 +365,30 @@ $("btnExtract").onclick = async () => {
     $("extractStatus").classList.add("err");
     return;
   }
-  $("extractStatus").textContent = "Extracting words\u2026";
   $("extractStatus").classList.remove("err");
+  $("btnExtract").disabled = true;
+  const t0 = Date.now();
+  const timer = setInterval(() => {
+    const elapsed = ((Date.now() - t0) / 1000).toFixed(0);
+    $("extractStatus").textContent = `Extracting words\u2026 (${elapsed}s)`;
+  }, 1000);
+  $("extractStatus").textContent = "Extracting words\u2026";
   try {
+    const resized = await resizeImage(f);
     const fd = new FormData();
-    fd.append("file", f);
+    fd.append("file", resized, f.name);
     const data = await api("/extract_words", { method: "POST", body: fd });
+    clearInterval(timer);
     $("wordsBox").value = (data.words || []).join("\n");
-    $("extractStatus").textContent = `Extracted ${data.words.length} words.`;
+    const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+    $("extractStatus").textContent = `Extracted ${data.words.length} words in ${elapsed}s.`;
     showWordEditor();
   } catch (e) {
+    clearInterval(timer);
     $("extractStatus").textContent = "Extraction failed: " + e.message;
     $("extractStatus").classList.add("err");
+  } finally {
+    $("btnExtract").disabled = false;
   }
 };
 
@@ -362,6 +432,9 @@ $("btnStartSession").onclick = async () => {
     state.idx = data.idx;
     state.word = data.word;
     state.total = data.total;
+    state.wrongWords = [];
+    state.wordsCompleted = 0;
+    state.originalWords = [...words];
     $("score").textContent = "0 / 0";
     $("progress").textContent = `1 / ${state.total}`;
     await ask();
@@ -378,15 +451,44 @@ $("btnStartSession").onclick = async () => {
 // Speak prompt
 $("btnSpeakPrompt").onclick = () => speak(state.prompt);
 
-// End practice
-$("btnEndPractice").onclick = () => {
+// End practice — with 25-word nudge
+function stopEverything() {
   state.handsFreeActive = false;
   cleanupMic();
   if (currentAudio) { currentAudio.pause(); currentAudio = null; }
   if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+}
+
+function showDone() {
+  stopEverything();
+  $("finalScore").textContent = `${state.wordsCompleted} words practiced`;
+  $("wrongWordsMsg").textContent = state.wrongWords.length > 0
+    ? `${state.wrongWords.length} word${state.wrongWords.length !== 1 ? "s" : ""} to review`
+    : "";
   state.sessionId = null;
-  showStage("stageSetup");
-  showWordEditor();
+  showStage("stageDone");
+}
+
+$("btnEndPractice").onclick = () => {
+  stopEverything();
+  if (state.wordsCompleted < MIN_WORDS) {
+    // Show nudge
+    $("nudgeMsg").textContent = `You've practiced ${state.wordsCompleted} word${state.wordsCompleted !== 1 ? "s" : ""} so far \u2014 can you do ${MIN_WORDS}?`;
+    $("nudgeOverlay").classList.remove("hidden");
+  } else {
+    showDone();
+  }
+};
+
+$("btnKeepGoing").onclick = () => {
+  $("nudgeOverlay").classList.add("hidden");
+  state.handsFreeActive = true;
+  handsFreeLoop();
+};
+
+$("btnEndAnyway").onclick = () => {
+  $("nudgeOverlay").classList.add("hidden");
+  showDone();
 };
 
 // Speak feedback
@@ -407,9 +509,37 @@ $("btnEditList").onclick = () => {
 $("btnRestart").onclick = () => {
   state.sessionId = null;
   state.handsFreeActive = false;
+  state.wrongWords = [];
+  state.wordsCompleted = 0;
   showStage("stageSetup");
   showWordEditor();
 };
+
+// Auto-start a review round with wrong words
+async function startReviewRound() {
+  const reviewWords = [...state.wrongWords];
+  state.wrongWords = [];  // Reset for this round
+  try {
+    const data = await api("/session/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ words: reviewWords, student_name: "Student" }),
+    });
+    state.sessionId = data.session_id;
+    state.idx = data.idx;
+    state.word = data.word;
+    state.total = data.total;
+    $("score").textContent = "0 / 0";
+    $("progress").textContent = `1 / ${state.total}`;
+    await ask();
+    showStage("stageSession");
+    hideResult();
+    state.handsFreeActive = true;
+    handsFreeLoop();
+  } catch (e) {
+    $("wrongWordsMsg").textContent = "Couldn't start review: " + e.message;
+  }
+}
 
 // Init
 showStage("stageSetup");

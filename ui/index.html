@@ -90,9 +90,23 @@
         <div class="done-emoji">&#x1F389;</div>
         <h2>Amazing work!</h2>
         <p id="finalScore" class="final-score"></p>
+        <p id="wrongWordsMsg" class="wrong-words-msg"></p>
         <button class="btn accent large" id="btnRestart">Practice Again</button>
       </div>
     </section>
+
+    <!-- ── Nudge overlay ── -->
+    <div id="nudgeOverlay" class="nudge-overlay hidden">
+      <div class="nudge-card fade-in">
+        <div class="nudge-emoji">&#x1F4AA;</div>
+        <h2 id="nudgeTitle">Keep going!</h2>
+        <p id="nudgeMsg" class="nudge-msg"></p>
+        <div class="btn-row">
+          <button class="btn accent large" id="btnKeepGoing">Keep Going!</button>
+          <button class="btn ghost" id="btnEndAnyway">End Anyway</button>
+        </div>
+      </div>
+    </div>
   </main>
 
   <script src="/app.js"></script>

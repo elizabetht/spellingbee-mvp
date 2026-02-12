@@ -350,6 +350,30 @@ textarea:focus { border-color: var(--accent); }
 .done-emoji { font-size: 4rem; margin-bottom: 12px; }
 .done-card h2 { font-size: 2rem; font-weight: 800; margin-bottom: 10px; }
 .final-score { font-size: 1.3rem; color: var(--accent); font-weight: 700; margin-bottom: 24px; }
+.wrong-words-msg { font-size: 1rem; color: var(--text2); margin-bottom: 16px; }
+
+/* ── Nudge Overlay ───────────────────────────────────── */
+.nudge-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 24px;
+}
+.nudge-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 40px 32px;
+  max-width: 400px;
+  text-align: center;
+}
+.nudge-emoji { font-size: 3rem; margin-bottom: 12px; }
+.nudge-card h2 { font-size: 1.6rem; font-weight: 800; margin-bottom: 8px; }
+.nudge-msg { font-size: 1rem; color: var(--text2); margin-bottom: 20px; }
 
 /* ── Responsive ──────────────────────────────────────── */
 @media (max-width: 480px) {

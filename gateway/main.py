@@ -269,7 +269,7 @@ def extract_words_with_vl(image_bytes: bytes, content_type: str) -> List[str]:
         VLLM_VL_MODEL,
         messages=[{"role":"system","content":system}, user_msg],
         temperature=0.0,
-        max_tokens=800,
+        max_tokens=400,
     )
     obj = extract_json_object(content)
     words = []
@@ -335,11 +335,62 @@ class AnswerResponse(BaseModel):
     done: bool
     score_correct: int
     score_total: int
+    wrong_words: List[str] = []
+
+class WordContextRequest(BaseModel):
+    word: str
+    session_id: str
+
+class WordContextResponse(BaseModel):
+    word: str
+    definition: str
+    sentence: str
 
 # ---------- Routes ----------
 @app.get("/healthz")
 def healthz():
     return {"ok": True, "ts": now_ms()}
+
+
+def _generate_word_context(session: dict, word: str) -> dict:
+    """
+    Generate a child-friendly definition and example sentence for a word.
+    Results are cached in the session to avoid redundant LLM calls.
+    """
+    cache = session.setdefault("word_context", {})
+    if word in cache:
+        return cache[word]
+
+    system = (
+        "You are a spelling bee pronouncer for a 9-year-old child. "
+        "Given a word, provide ONLY:\n"
+        "1) A short, child-friendly definition (one sentence)\n"
+        "2) One simple example sentence using the word\n"
+        "Do NOT provide any other content. Do NOT discuss anything outside spelling."
+        "If the word seems inappropriate for a child, just say 'A spelling word.' as the definition "
+        "and 'This is a spelling word.' as the sentence.\n"
+        'Output JSON only: {"definition":"...","sentence":"..."}'
+    )
+    user = f'Word: "{word}"'
+
+    try:
+        content = vllm_chat(
+            VLLM_TEXT_BASE,
+            VLLM_TEXT_MODEL,
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            temperature=0.0,
+            max_tokens=150,
+        )
+        obj = extract_json_object(content) or {}
+        result = {
+            "definition": (obj.get("definition") or "A spelling word.").strip(),
+            "sentence": (obj.get("sentence") or "").strip(),
+        }
+    except Exception:
+        result = {"definition": "", "sentence": ""}
+
+    cache[word] = result
+    return result
 
 
 class TTSRequest(BaseModel):
@@ -444,6 +495,8 @@ def start_session(req: StartSessionRequest):
         "attempts": {},  # idx -> attempts
         "score_correct": 0,
         "score_total": 0,
+        "wrong_words": [],  # words the child got wrong (exhausted retries)
+        "word_context": {},  # word -> {"definition": ..., "sentence": ...}
         "created_ms": now_ms(),
     }
     return {
@@ -464,10 +517,27 @@ def turn_ask(session_id: str = Form(...)):
         raise HTTPException(status_code=409, detail="Session already complete")
 
     word = words[idx]
-    if idx == 0:
-        prompt_text = f"Spell {word}. Say one letter at a time."
+
+    # Generate definition + example sentence (cached per session)
+    ctx = _generate_word_context(s, word)
+    definition = ctx.get("definition", "")
+    sentence = ctx.get("sentence", "")
+
+    # Build prompt with context
+    if definition:
+        meaning_part = f"{word} means {definition}"
+        if sentence:
+            meaning_part += f" For example: {sentence}"
     else:
-        prompt_text = f"Spell {word}."
+        meaning_part = ""
+
+    if idx == 0:
+        base = f"Spell {word}. Say one letter at a time."
+    else:
+        base = f"Spell {word}."
+
+    prompt_text = f"{base} {meaning_part}".strip() if meaning_part else base
+
     return {"session_id": session_id, "idx": idx, "word": word, "prompt_text": prompt_text}
 
 @app.post("/turn/answer", response_model=AnswerResponse)
@@ -496,6 +566,7 @@ async def turn_answer(
             "done": True,
             "score_correct": s["score_correct"],
             "score_total": s["score_total"],
+            "wrong_words": s["wrong_words"],
         }
 
     target = words[idx]
@@ -600,6 +671,7 @@ async def turn_answer(
         else:
             reveal = "-".join(list(target_norm))
             feedback = f"Not quite. The correct spelling is {reveal}. Next word."
+            s["wrong_words"].append(target)
             next_idx = idx + 1
             s["idx"] = next_idx
             if next_idx >= len(words):
@@ -619,4 +691,18 @@ async def turn_answer(
         "done": done,
         "score_correct": s["score_correct"],
         "score_total": s["score_total"],
+        "wrong_words": s["wrong_words"] if done else [],
     }
+
+
+@app.post("/word/context", response_model=WordContextResponse)
+def word_context(req: WordContextRequest):
+    """Return definition + example sentence for a word. Guardrailed: word must be in session."""
+    s = SESSIONS.get(req.session_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="Unknown session_id")
+    word_norm = normalize_word(req.word)
+    if word_norm not in s["words"]:
+        raise HTTPException(status_code=403, detail="Word not in session word list")
+    ctx = _generate_word_context(s, word_norm)
+    return {"word": word_norm, "definition": ctx.get("definition", ""), "sentence": ctx.get("sentence", "")}
