@@ -81,7 +81,6 @@ data:
         </div>
 
         <p><b>Progress:</b> <span id="progress">-</span> &nbsp; <b>Score:</b> <span id="score">-</span></p>
-        <p><b>Word:</b> <span id="word" class="mono">-</span></p>
         <p><b>Prompt:</b> <span id="prompt">-</span></p>
         <hr/>
         <p><label><input id="handsFree" type="checkbox" /> <b>Hands-Free Mode</b> — auto-listen, check &amp; advance</label></p>
@@ -135,7 +134,6 @@ data:
       sessionId: null,
       idx: 0,
       total: 0,
-      word: null,
       prompt: null,
       mediaRecorder: null,
       chunks: [],
@@ -244,7 +242,6 @@ data:
 
     function updateUI() {
       $("progress").textContent = state.sessionId ? `${state.idx+1} / ${state.total}` : "-";
-      $("word").textContent = state.word || "-";
       $("prompt").textContent = state.prompt || "-";
       $("btnSpeakPrompt").disabled = !state.prompt;
       $("btnRecStart").disabled = !state.sessionId || state.handsFreeActive;
@@ -368,7 +365,7 @@ data:
         if (data.done) {
           setHFStatus("All done! Great job!");
           state.handsFreeActive = false;
-          state.prompt = "All done!"; state.word = "";
+          state.prompt = "All done!";
           updateUI(); return;
         }
         await ask(); updateUI();
@@ -413,7 +410,6 @@ data:
         });
         state.sessionId = data.session_id;
         state.idx = data.idx;
-        state.word = data.word;
         state.total = data.total;
         $("score").textContent = "0 / 0";
         $("result").textContent = "-";
@@ -437,7 +433,6 @@ data:
       fd.append("session_id", state.sessionId);
       const data = await api("/turn/ask", { method: "POST", body: fd });
       state.idx = data.idx;
-      state.word = data.word;
       state.prompt = data.prompt_text;
       updateUI();
     }
@@ -550,7 +545,6 @@ data:
 
         if (data.done) {
           state.prompt = "All done!";
-          state.word = "";
           updateUI();
           speak(data.feedback_text);
           return;

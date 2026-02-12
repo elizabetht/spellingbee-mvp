@@ -279,19 +279,16 @@ class StartSessionRequest(BaseModel):
 class StartSessionResponse(BaseModel):
     session_id: str
     idx: int
-    word: str
     total: int
 
 class AskResponse(BaseModel):
     session_id: str
     idx: int
-    word: str
     prompt_text: str
 
 class AnswerResponse(BaseModel):
     session_id: str
     idx: int
-    word: str
     transcript: str
     letters: str
     correct: bool
@@ -371,7 +368,6 @@ def start_session(req: StartSessionRequest):
     return {
         "session_id": session_id,
         "idx": 0,
-        "word": words[0],
         "total": len(words),
     }
 
@@ -387,7 +383,7 @@ def turn_ask(session_id: str = Form(...)):
 
     word = words[idx]
     prompt_text = f"Spell {word}. Say one letter at a time."
-    return {"session_id": session_id, "idx": idx, "word": word, "prompt_text": prompt_text}
+    return {"session_id": session_id, "idx": idx, "prompt_text": prompt_text}
 
 @app.post("/turn/answer", response_model=AnswerResponse)
 async def turn_answer(
@@ -405,7 +401,6 @@ async def turn_answer(
         return {
             "session_id": session_id,
             "idx": idx,
-            "word": "",
             "transcript": "",
             "letters": "",
             "correct": True,
@@ -468,7 +463,7 @@ async def turn_answer(
             done = True
             feedback = f"Great job! You finished all {len(words)} words."
         else:
-            feedback = f"Nice! {target} is correct. Next word."
+            feedback = "Nice! That's correct. Next word."
     else:
         if attempts <= RETRY_ON_WRONG:
             feedback = "Good try. Let's try that word again. Spell it one letter at a time."
@@ -484,7 +479,6 @@ async def turn_answer(
     return {
         "session_id": session_id,
         "idx": idx,
-        "word": target,
         "transcript": tx + (f" (llm_conf={conf})" if used_llm else ""),
         "letters": spelled_norm,
         "correct": correct,
