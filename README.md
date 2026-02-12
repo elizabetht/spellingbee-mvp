@@ -32,8 +32,8 @@ spellingbee-mvp/
 | **UI** | Vanilla HTML/JS/CSS served by nginx. Three stages: Setup → Session → Done. Auto-starts a voice-driven loop on practice start — speaks prompts via TTS, records via mic with VAD silence detection, submits transcript, speaks feedback. Client-side image resize before upload. |
 | **Gateway** | FastAPI (Python). Central orchestrator — handles `/extract_words`, `/session/start`, `/turn/ask`, `/turn/answer`, `/word/context`, `/tts`. Manages sessions in-memory, runs deterministic letter parsing with LLM fallback, generates child-friendly definitions, tracks wrong words. |
 | **ASR** | `faster-whisper` with Whisper `base.en` model (CPU-only). Also supports browser Web Speech API as a zero-latency alternative — the browser sends the live transcript directly. |
-| **Nemotron VL** | NVIDIA `Nemotron-Nano-12B-v2-VL` via vLLM. Extracts spelling words from uploaded photos of word lists. |
-| **Nemotron Text** | NVIDIA `Nemotron-3-Nano-30B-A3B` via vLLM. Two roles: (1) LLM fallback for letter parsing when deterministic matching fails, (2) generates child-friendly word definitions and example sentences. |
+| **Nemotron VL** | NVIDIA `Nemotron-Nano-12B-v2-VL-FP8` via vLLM. Extracts spelling words from uploaded photos of word lists. |
+| **Text LLM** | Meta `Llama-3.1-8B-Instruct` via vLLM. Two roles: (1) LLM fallback for letter parsing when deterministic matching fails, (2) generates child-friendly word definitions and example sentences. |
 | **Magpie TTS** | NVIDIA Magpie Multilingual TTS via Riva gRPC (NVCF). Primary voice (`Sofia`). Falls back to ElevenLabs API, then browser `SpeechSynthesis`. |
 
 ### Sequence Diagram
@@ -44,7 +44,7 @@ sequenceDiagram
     participant Browser as UI (Browser)
     participant GW as Gateway (FastAPI)
     participant TTS as Magpie TTS
-    participant TextLLM as Nemotron Text
+    participant TextLLM as Llama 3.1 8B
     participant VL as Nemotron VL
 
     Note over Child, VL: Setup
@@ -109,13 +109,13 @@ Spoken letter recognition is the hardest problem. The app uses a multi-stage app
 
 1. **Deterministic parsing** — Maps phonetic sounds to letters using a homophone dictionary (~60 entries: "bee"→B, "cee"→C, "age"→H, "are"→R, etc.) and NATO alphabet support
 2. **Multi-character token splitting** — When speech recognition concatenates letter sounds into words (e.g., child spells N-E-C-E-S-S-A-R-Y but SR outputs "necessary"), splits into individual letters
-3. **LLM fallback** — If deterministic result doesn't match the target word, sends the raw transcript to Nemotron Text for intelligent letter extraction
+3. **LLM fallback** — If deterministic result doesn't match the target word, sends the raw transcript to Llama 3.1 for intelligent letter extraction
 4. **Whole-word match** — If SR recognized the target word itself from the letter-by-letter speech, accepts it as correct
 
 ## Key Features
 
 - **Fully voice-driven** — no interaction needed during practice; speaks prompts, listens with VAD, speaks feedback automatically
-- **Image-to-word-list extraction** using Nemotron VL vision-language model
+- **Image-to-word-list extraction** using Nemotron VL (FP8) vision-language model
 - **Word definitions & example sentences** — auto-spoken before each word, also available on demand ("what does it mean?")
 - **Deterministic + LLM letter parsing** with 60+ phonetic homophones, NATO alphabet, and intelligent fallback
 - **Wrong-word tracking & auto-review** — missed words automatically replayed in review rounds

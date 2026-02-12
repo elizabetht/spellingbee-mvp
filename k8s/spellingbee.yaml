@@ -68,11 +68,11 @@ spec:
             - name: VLLM_TEXT_BASE
               value: "http://vllm-llama-31-8b:8000/v1"
             - name: VLLM_TEXT_MODEL
-              value: "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"
+              value: "meta-llama/Llama-3.1-8B-Instruct"
             - name: VLLM_VL_BASE
               value: "http://vllm-nemotron-vl:5566/v1"
             - name: VLLM_VL_MODEL
-              value: "nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16"
+              value: "nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-FP8"
             - name: MAGPIE_TTS_API_KEY
               valueFrom:
                 secretKeyRef:
