@@ -287,6 +287,18 @@ async function handsFreeLoop() {
     return;
   }
 
+  // Detect off-topic questions/chat (not spelling letters)
+  const chatPattern = /\b(what are|tell me|who is|where is|how do|can you|do you know|play|watch|netflix|movie|game|song|music|youtube|story|joke|weather|time|news|search|google|hey siri|alexa|okay google)\b/;
+  const words = tx.trim().split(/\s+/);
+  if (chatPattern.test(tx) || (words.length > 6 && !tx.split("").every(c => /[a-z\s]/.test(c)))) {
+    await speakAndWait(`I can only help with spelling practice! Let's get back to it. Spell ${state.word}.`);
+    if (state.handsFreeActive) {
+      await new Promise(r => setTimeout(r, 400));
+      handsFreeLoop();
+    }
+    return;
+  }
+
   setRing("processing", "\u2699\uFE0F", "Checking\u2026");
   try {
     const fd = new FormData();

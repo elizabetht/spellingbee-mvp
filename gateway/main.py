@@ -548,29 +548,10 @@ def turn_ask(session_id: str = Form(...)):
 
     word = words[idx]
 
-    # Generate definition + example sentence (cached per session, best-effort)
-    try:
-        ctx = _generate_word_context(s, word)
-        definition = ctx.get("definition", "")
-        sentence = ctx.get("sentence", "")
-    except Exception:
-        definition = ""
-        sentence = ""
-
-    # Build prompt with context
-    if definition:
-        meaning_part = f"{word} means {definition}"
-        if sentence:
-            meaning_part += f" For example: {sentence}"
-    else:
-        meaning_part = ""
-
     if idx == 0:
-        base = f"Spell {word}. Say one letter at a time."
+        prompt_text = f"Spell {word}. Say one letter at a time."
     else:
-        base = f"Spell {word}."
-
-    prompt_text = f"{base} {meaning_part}".strip() if meaning_part else base
+        prompt_text = f"Spell {word}."
 
     return {"session_id": session_id, "idx": idx, "word": word, "prompt_text": prompt_text}
 
