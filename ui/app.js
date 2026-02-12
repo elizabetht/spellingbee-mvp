@@ -19,6 +19,40 @@ const state = {
 
 const MIN_WORDS = 25;
 
+/* ── Session Persistence (localStorage) ───────────────── */
+const STORAGE_KEY = "spellingbee_session";
+
+function saveProgress() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      originalWords: state.originalWords,
+      wordsCompleted: state.wordsCompleted,
+      wrongWords: state.wrongWords,
+      remainingWords: state.originalWords.slice(state.wordsCompleted),
+      savedAt: Date.now(),
+    }));
+  } catch (e) { /* ignore */ }
+}
+
+function loadSavedSession() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const saved = JSON.parse(raw);
+    if (Date.now() - saved.savedAt > 24 * 60 * 60 * 1000) {
+      localStorage.removeItem(STORAGE_KEY);
+      return null;
+    }
+    if (saved.remainingWords && saved.remainingWords.length > 0) return saved;
+    localStorage.removeItem(STORAGE_KEY);
+    return null;
+  } catch (e) { return null; }
+}
+
+function clearSavedSession() {
+  try { localStorage.removeItem(STORAGE_KEY); } catch (e) { /* ignore */ }
+}
+
 /* ── TTS ──────────────────────────────────────────────── */
 let currentAudio = null;
 
@@ -260,10 +294,13 @@ async function handsFreeLoop() {
   }
   if (!state.handsFreeActive) return;
 
-  // Check if the child asked for a definition instead of spelling
+  // Check if the child asked for a definition or sentence usage
   const tx = (recording.transcript || "").toLowerCase();
-  const defPattern = /\b(definition|meaning|what does it mean|what does that mean|what is that|what's that mean|use it in a sentence|sentence|explain)\b/;
-  if (defPattern.test(tx)) {
+  const sentencePattern = /\b(use it in a sentence|sentence)\b/;
+  const defPattern = /\b(definition|meaning|what does it mean|what does that mean|what is that|what's that mean|explain)\b/;
+  const wantsSentence = sentencePattern.test(tx);
+  const wantsDef = defPattern.test(tx);
+  if (wantsSentence || wantsDef) {
     setRing("idle", "\u{1F4D6}", "Getting definition\u2026");
     try {
       const ctx = await api("/word/context", {
@@ -271,9 +308,14 @@ async function handsFreeLoop() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ word: state.word, session_id: state.sessionId }),
       });
-      const defText = ctx.definition
-        ? `${state.word} means ${ctx.definition}${ctx.sentence ? ". For example: " + ctx.sentence : ""}`
-        : `Sorry, I don't have a definition for ${state.word} right now. Let's keep spelling!`;
+      let defText;
+      if (wantsSentence && ctx.sentence) {
+        defText = ctx.sentence;
+      } else if (ctx.definition) {
+        defText = `${state.word} means ${ctx.definition}`;
+      } else {
+        defText = `Sorry, I don't have that for ${state.word} right now. Let's keep spelling!`;
+      }
       await speakAndWait(defText);
     } catch (e) {
       await speakAndWait(`Sorry, I couldn't get the definition for ${state.word}.`);
@@ -321,6 +363,7 @@ async function handsFreeLoop() {
     }
     if (data.correct || data.attempts_for_word > 1) {
       state.wordsCompleted++;
+      saveProgress();
     }
 
     await speakAndWait(data.feedback_text);
@@ -332,20 +375,11 @@ async function handsFreeLoop() {
           if (!state.wrongWords.includes(w)) state.wrongWords.push(w);
         });
       }
-
+      state.handsFreeActive = false;
+      showDone();
       if (state.wrongWords.length > 0) {
-        // Auto-start review round with wrong words
-        $("finalScore").textContent = `${data.score_correct} out of ${data.score_total} correct`;
-        $("wrongWordsMsg").textContent = `Let's practice the ${state.wrongWords.length} word${state.wrongWords.length !== 1 ? "s" : ""} you missed!`;
-        showStage("stageDone");
-        await speakAndWait(`Nice work! Now let's practice the ${state.wrongWords.length} words you missed.`);
-        await new Promise(r => setTimeout(r, 1500));
-        await startReviewRound();
+        await speakAndWait(`Nice work! You have ${state.wrongWords.length} word${state.wrongWords.length !== 1 ? "s" : ""} to review. Press Review These Words when you're ready.`);
       } else {
-        $("finalScore").textContent = `${data.score_correct} out of ${data.score_total} correct`;
-        $("wrongWordsMsg").textContent = "You got everything right! \u{1F31F}";
-        state.handsFreeActive = false;
-        showStage("stageDone");
         await speakAndWait("You got everything right! Amazing!");
       }
       return;
@@ -474,6 +508,7 @@ $("btnStartSession").onclick = async () => {
     state.wrongWords = [];
     state.wordsCompleted = 0;
     state.originalWords = [...words];
+    saveProgress();
     $("score").textContent = "0 / 0";
     $("progress").textContent = `1 / ${state.total}`;
     await ask();
@@ -504,19 +539,14 @@ function showDone() {
 
   const wl = $("wrongWordsList");
   wl.innerHTML = "";
+  wl.classList.add("hidden");
   if (state.wrongWords.length > 0) {
-    $("wrongWordsMsg").textContent = `${state.wrongWords.length} word${state.wrongWords.length !== 1 ? "s" : ""} to review:`;
-    state.wrongWords.forEach(w => {
-      const li = document.createElement("li");
-      li.textContent = w;
-      wl.appendChild(li);
-    });
-    wl.classList.remove("hidden");
+    $("wrongWordsMsg").textContent = `${state.wrongWords.length} word${state.wrongWords.length !== 1 ? "s" : ""} to review`;
     $("btnReviewWrong").classList.remove("hidden");
   } else {
     $("wrongWordsMsg").textContent = "No mistakes — perfect score!";
-    wl.classList.add("hidden");
     $("btnReviewWrong").classList.add("hidden");
+    clearSavedSession();
   }
   state.sessionId = null;
   showStage("stageDone");
@@ -599,3 +629,47 @@ async function startReviewRound() {
 
 // Init
 showStage("stageSetup");
+
+// Check for a saved session to resume
+(function checkResume() {
+  const saved = loadSavedSession();
+  if (!saved) return;
+  const remaining = saved.remainingWords.length;
+  const total = saved.originalWords.length;
+  const done = total - remaining;
+  $("resumeMsg").textContent = `You practiced ${done} of ${total} words last time. ${remaining} left!`;
+  $("resumeBanner").classList.remove("hidden");
+
+  $("btnResume").onclick = async () => {
+    $("resumeBanner").classList.add("hidden");
+    state.wordsCompleted = done;
+    state.wrongWords = saved.wrongWords || [];
+    state.originalWords = saved.originalWords;
+    const words = saved.remainingWords;
+    try {
+      const data = await api("/session/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ words, student_name: "Student" }),
+      });
+      state.sessionId = data.session_id;
+      state.idx = data.idx;
+      state.word = data.word;
+      state.total = data.total;
+      $("score").textContent = "0 / 0";
+      $("progress").textContent = `${done + 1} / ${total}`;
+      await ask();
+      showStage("stageSession");
+      hideResult();
+      state.handsFreeActive = true;
+      handsFreeLoop();
+    } catch (e) {
+      alert("Resume failed: " + e.message);
+    }
+  };
+
+  $("btnNewSession").onclick = () => {
+    clearSavedSession();
+    $("resumeBanner").classList.add("hidden");
+  };
+})();

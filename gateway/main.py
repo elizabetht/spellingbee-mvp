@@ -684,14 +684,14 @@ async def turn_answer(
         if attempts <= RETRY_ON_WRONG:
             feedback = "Not quite. Try again."
         else:
-            reveal = "-".join(list(target_norm))
-            feedback = f"Not quite. The correct spelling is {reveal}. Next word."
+            reveal = " ... ".join(list(target_norm))
+            feedback = f"Not quite. The correct spelling is {reveal}. ... Next word."
             s["wrong_words"].append(target)
             next_idx = idx + 1
             s["idx"] = next_idx
             if next_idx >= len(words):
                 done = True
-                feedback = f"Not quite. The correct spelling was {reveal}. You're done for today!"
+                feedback = f"Not quite. The correct spelling was {reveal}. ... You're done for today!"
 
     return {
         "session_id": session_id,

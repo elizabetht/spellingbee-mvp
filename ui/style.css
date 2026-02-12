@@ -393,6 +393,17 @@ textarea:focus { border-color: var(--accent); }
 .nudge-card h2 { font-size: 1.6rem; font-weight: 800; margin-bottom: 8px; }
 .nudge-msg { font-size: 1rem; color: var(--text2); margin-bottom: 20px; }
 
+/* ── Resume banner ───────────────────────────────────── */
+.resume-banner {
+  background: var(--surface2, #2a2a3e);
+  border: 1px solid var(--accent);
+  border-radius: 16px;
+  padding: 20px 24px;
+  margin-bottom: 20px;
+  text-align: center;
+}
+.resume-msg { font-size: 1rem; color: var(--text2); margin-bottom: 12px; }
+
 /* ── Responsive ──────────────────────────────────────── */
 @media (max-width: 480px) {
   header { padding: 14px 16px 6px; }
