@@ -33,7 +33,7 @@ ASR_TIMEOUT_S = float(os.getenv("ASR_TIMEOUT_S", "30"))
 MAGPIE_TTS_URL = os.getenv("MAGPIE_TTS_URL", "grpc.nvcf.nvidia.com:443")
 MAGPIE_TTS_FUNCTION_ID = os.getenv("MAGPIE_TTS_FUNCTION_ID", "877104f7-e885-42b9-8de8-f6e4c6303969")
 MAGPIE_TTS_API_KEY = os.getenv("MAGPIE_TTS_API_KEY", "")
-MAGPIE_TTS_VOICE = os.getenv("MAGPIE_TTS_VOICE", "Magpie-Multilingual.EN-US.Pascal")
+MAGPIE_TTS_VOICE = os.getenv("MAGPIE_TTS_VOICE", "Magpie-Multilingual.EN-US.Sofia")
 MAGPIE_TTS_LANGUAGE = os.getenv("MAGPIE_TTS_LANGUAGE", "en-US")
 MAGPIE_TTS_USE_SSL = os.getenv("MAGPIE_TTS_USE_SSL", "true").lower() == "true"
 
@@ -73,31 +73,31 @@ NATO = {
 }
 
 LETTER_HOMOPHONES = {
-    "ay":"a","a":"a",
+    "ay":"a","a":"a","aye":"a","hey":"a",
     "bee":"b","be":"b","b":"b",
     "cee":"c","see":"c","sea":"c","c":"c",
     "dee":"d","d":"d",
-    "ee":"e","e":"e",
-    "ef":"f","f":"f",
-    "gee":"g","g":"g",
-    "aitch":"h","h":"h",
-    "i":"i",
+    "ee":"e","e":"e","he":"e",
+    "ef":"f","eff":"f","f":"f",
+    "gee":"g","g":"g","ji":"g",
+    "aitch":"h","h":"h","age":"h","each":"h","ach":"h",
+    "i":"i","eye":"i",
     "jay":"j","j":"j",
-    "kay":"k","k":"k",
-    "el":"l","l":"l",
+    "kay":"k","k":"k","okay":"k",
+    "el":"l","l":"l","ell":"l","elle":"l",
     "em":"m","m":"m",
-    "en":"n","n":"n",
-    "oh":"o","o":"o",
-    "pee":"p","p":"p",
-    "cue":"q","queue":"q","q":"q",
-    "are":"r","r":"r",
-    "ess":"s","s":"s",
-    "tee":"t","t":"t",
-    "you":"u","u":"u",
-    "vee":"v","v":"v",
+    "en":"n","n":"n","and":"n","end":"n",
+    "oh":"o","o":"o","owe":"o","ow":"o",
+    "pee":"p","p":"p","pea":"p",
+    "cue":"q","queue":"q","q":"q","kew":"q",
+    "are":"r","r":"r","our":"r","ar":"r",
+    "ess":"s","s":"s","es":"s",
+    "tee":"t","t":"t","tea":"t",
+    "you":"u","u":"u","yew":"u",
+    "vee":"v","v":"v","ve":"v",
     "doubleyou":"w","double-u":"w","doubleu":"w","w":"w",
     "ex":"x","x":"x",
-    "why":"y","y":"y",
+    "why":"y","y":"y","wye":"y",
     "zee":"z","zed":"z","z":"z",
 }
 
@@ -179,8 +179,13 @@ def parse_letters_deterministic(transcript: str) -> List[str]:
             letters.append(LETTER_HOMOPHONES[tok])
         elif len(tok) == 1 and _letter_re.fullmatch(tok):
             letters.append(tok)
+        elif len(tok) > 1 and tok.isalpha():
+            # SR sometimes concatenates letter sounds into a word
+            # (e.g. child spells N-E-C-E-S-S-A-R-Y, SR outputs "necessary")
+            # Split into individual letters as a last resort
+            for c in tok:
+                letters.append(c)
         else:
-            # ignore non-letter tokens
             pass
 
     return letters
@@ -459,7 +464,10 @@ def turn_ask(session_id: str = Form(...)):
         raise HTTPException(status_code=409, detail="Session already complete")
 
     word = words[idx]
-    prompt_text = f"Spell {word}. Say one letter at a time."
+    if idx == 0:
+        prompt_text = f"Spell {word}. Say one letter at a time."
+    else:
+        prompt_text = f"Spell {word}."
     return {"session_id": session_id, "idx": idx, "word": word, "prompt_text": prompt_text}
 
 @app.post("/turn/answer", response_model=AnswerResponse)
@@ -525,15 +533,20 @@ async def turn_answer(
     letters_list = candidates[0][1] if candidates else []
     source = candidates[0][0] if candidates else "none"
 
-    # 3) If deterministic parsing looks weak, try LLM on both transcripts
+    # 3) Check deterministic result; fall back to LLM if it doesn't match
     used_llm = False
     conf = "n/a"
-    if len(letters_list) < 2 or abs(len(letters_list) - len(target)) > 2:
-        # Try LLM on the combined/best transcript
+    det_spelled = normalize_word("".join(letters_list))
+    target_norm = normalize_word(target)
+
+    if det_spelled != target_norm:
+        # Deterministic didn't match — try LLM on the combined transcript
         combined_tx = f"{browser_tx} | {asr_tx}".strip(" |") if (browser_tx and asr_tx) else tx
         try:
             llm_letters, conf = parse_letters_with_llm(combined_tx)
-            if len(llm_letters) >= len(letters_list):
+            llm_norm = normalize_word("".join(llm_letters))
+            # Accept LLM result if it matches target OR has more letters than det
+            if llm_norm == target_norm or len(llm_letters) > len(letters_list):
                 letters_list = llm_letters
                 used_llm = True
                 source = "llm"
@@ -542,10 +555,25 @@ async def turn_answer(
 
     spelled = "".join(letters_list)
     spelled_norm = normalize_word(spelled)
-    target_norm = normalize_word(target)
 
-    # 4) Grade deterministically
+    # 4) Grade — also accept if SR recognized the whole word directly
     correct = (spelled_norm == target_norm)
+
+    if not correct:
+        # SR sometimes outputs the target word itself from letter-by-letter speech
+        for src_tx in [browser_tx, asr_tx]:
+            if src_tx and normalize_word(src_tx) == target_norm:
+                correct = True
+                spelled_norm = target_norm
+                break
+            # Check individual tokens too (SR may add filler around the word)
+            for tok in src_tx.lower().split() if src_tx else []:
+                if normalize_word(tok) == target_norm:
+                    correct = True
+                    spelled_norm = target_norm
+                    break
+            if correct:
+                break
 
     # 5) Update attempts + score
     attempts = s["attempts"].get(idx, 0) + 1
@@ -568,7 +596,7 @@ async def turn_answer(
             feedback = f"Nice! {target} is correct. Next word."
     else:
         if attempts <= RETRY_ON_WRONG:
-            feedback = "Good try. Let's try that word again. Spell it one letter at a time."
+            feedback = "Not quite. Try again."
         else:
             reveal = "-".join(list(target_norm))
             feedback = f"Not quite. The correct spelling is {reveal}. Next word."
