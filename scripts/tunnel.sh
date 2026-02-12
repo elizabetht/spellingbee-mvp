@@ -1,22 +1,17 @@
 #!/usr/bin/env bash
 # Opens a tunnel to the spellingbee UI on localhost:8080
 # Usage: bash scripts/tunnel.sh [port]
-set -euo pipefail
+set -uo pipefail
 
 PORT="${1:-8080}"
 HOST="nvidia@192.168.1.75"
 
 # Kill any existing process on the local port
-if lsof -ti:"${PORT}" &>/dev/null; then
-  echo "Killing existing process on local port ${PORT}..."
-  lsof -ti:"${PORT}" | xargs kill -9 2>/dev/null || true
-  sleep 1
-fi
+lsof -ti:"${PORT}" 2>/dev/null | xargs kill -9 2>/dev/null || true
 
-# Kill any existing kubectl port-forward on the remote host
-echo "Cleaning up remote port-forward..."
-ssh "${HOST}" "pkill -f 'kubectl.*port-forward.*spellingbee-ui' 2>/dev/null || true"
-sleep 1
+# Kill any stale kubectl port-forward on the remote host
+ssh "${HOST}" 'kill $(pgrep -f "port-forward svc/spellingbee-ui") 2>/dev/null' 2>/dev/null || true
+sleep 2
 
 echo "Tunneling spellingbee UI to http://localhost:${PORT}"
 echo "Press Ctrl+C to stop"
