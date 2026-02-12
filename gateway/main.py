@@ -463,7 +463,7 @@ async def turn_answer(
             done = True
             feedback = f"Great job! You finished all {len(words)} words."
         else:
-            feedback = "Nice! That's correct. Next word."
+            feedback = "Nice! Your spelling is correct. Next word."
     else:
         if attempts <= RETRY_ON_WRONG:
             feedback = "Good try. Let's try that word again. Spell it one letter at a time."
