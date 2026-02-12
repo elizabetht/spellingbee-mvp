@@ -489,9 +489,23 @@ function stopEverything() {
 function showDone() {
   stopEverything();
   $("finalScore").textContent = `${state.wordsCompleted} words practiced`;
-  $("wrongWordsMsg").textContent = state.wrongWords.length > 0
-    ? `${state.wrongWords.length} word${state.wrongWords.length !== 1 ? "s" : ""} to review`
-    : "";
+
+  const wl = $("wrongWordsList");
+  wl.innerHTML = "";
+  if (state.wrongWords.length > 0) {
+    $("wrongWordsMsg").textContent = `${state.wrongWords.length} word${state.wrongWords.length !== 1 ? "s" : ""} to review:`;
+    state.wrongWords.forEach(w => {
+      const li = document.createElement("li");
+      li.textContent = w;
+      wl.appendChild(li);
+    });
+    wl.classList.remove("hidden");
+    $("btnReviewWrong").classList.remove("hidden");
+  } else {
+    $("wrongWordsMsg").textContent = "No mistakes — perfect score!";
+    wl.classList.add("hidden");
+    $("btnReviewWrong").classList.add("hidden");
+  }
   state.sessionId = null;
   showStage("stageDone");
 }
@@ -517,6 +531,9 @@ $("btnEndAnyway").onclick = () => {
   $("nudgeOverlay").classList.add("hidden");
   showDone();
 };
+
+// Review wrong words from Done screen
+$("btnReviewWrong").onclick = () => startReviewRound();
 
 // Speak feedback
 $("btnSpeakFeedback").onclick = () => speak($("feedback").textContent);
