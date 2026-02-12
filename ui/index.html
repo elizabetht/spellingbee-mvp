@@ -1,0 +1,78 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Spelling Bee MVP</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <h1>Spelling Bee Assistant (MVP)</h1>
+
+  <div class="card">
+    <h2>1) Upload word list image</h2>
+    <input id="img" type="file" accept="image/*" />
+    <div class="row">
+      <button class="primary" id="btnExtract">Extract words (Nemotron VL)</button>
+      <button id="btnDemoList">Use demo list</button>
+    </div>
+    <p id="extractStatus" class="hint"></p>
+    <h3>Editable word list</h3>
+    <textarea id="wordsBox" placeholder="Words will appear here..."></textarea>
+  </div>
+
+  <div class="card">
+    <h2>2) Start session</h2>
+    <label>Student name</label>
+    <input id="studentName" type="text" value="Student" />
+    <div class="row">
+      <button class="primary" id="btnStart">Start</button>
+      <button id="btnSpeakPrompt" disabled>Speak prompt</button>
+    </div>
+
+    <p><b>Progress:</b> <span id="progress">-</span> &nbsp; <b>Score:</b> <span id="score">-</span></p>
+    <p><b>Prompt:</b> <span id="prompt">-</span></p>
+    <hr/>
+    <p><label><input id="handsFree" type="checkbox" /> <b>Hands-Free Mode</b> — auto-listen, check &amp; advance</label></p>
+    <div id="hfStatus" style="display:none; padding:10px; border-radius:8px; background:#f0f9f4; margin-top:8px;">
+      <p id="hfText" style="margin:4px 0; font-weight:600;">Ready</p>
+      <div id="liveTranscript" style="font-size:1.3em; font-family:monospace; min-height:36px; padding:8px; background:#fff; border:2px solid #0a7; border-radius:8px; margin:8px 0; color:#333;"></div>
+      <button id="btnHFStop" style="background:#c30; color:#fff; border-color:#c30;">Stop Hands-Free</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>3) Answer</h2>
+    <p class="hint" id="micHint">
+      <b>Mic not working?</b> Browsers require HTTPS for mic on non-localhost.<br/>
+      Fix: <code>microk8s kubectl -n spellingbee port-forward svc/spellingbee-ui 8080:8080</code><br/>
+      then open <a href="http://localhost:8080">http://localhost:8080</a><br/>
+      Or: Chrome &rarr; <code>chrome://flags</code> &rarr; "Insecure origins treated as secure" &rarr; add your URL.
+    </p>
+
+    <div class="row">
+      <button class="primary" id="btnRecStart" disabled>Start Recording</button>
+      <button id="btnRecStop" disabled>Stop</button>
+      <button id="btnSubmit" disabled>Submit Audio</button>
+    </div>
+
+    <p><label><input id="useLiveStt" type="checkbox" /> Use Live Transcript (Chrome)</label></p>
+    <div class="row">
+      <button id="btnLiveStart" disabled>Start Live STT</button>
+      <button id="btnLiveStop" disabled>Stop Live STT</button>
+    </div>
+
+    <p><b>Transcript:</b></p>
+    <input id="transcript" type="text" placeholder="(Optional) If ASR not configured, paste transcript here." />
+
+    <p><b>Result:</b> <span id="result">-</span></p>
+    <p><b>Parsed letters:</b> <span id="letters" class="mono">-</span></p>
+    <p><b>Feedback:</b> <span id="feedback">-</span></p>
+    <div class="row">
+      <button id="btnSpeakFeedback" disabled>Speak feedback</button>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
