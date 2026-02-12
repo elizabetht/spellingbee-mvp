@@ -412,11 +412,11 @@ spec:
             - name: VLLM_TEXT_BASE
               value: "http://vllm-nemotron-text:8000/v1"
             - name: VLLM_TEXT_MODEL
-              value: "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"
+              value: "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4"
             - name: VLLM_VL_BASE
               value: "http://vllm-nemotron-vl:5566/v1"
             - name: VLLM_VL_MODEL
-              value: "nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16"
+              value: "nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-FP8"
             # Optional: plug in ASR service later
             - name: ASR_BASE
               value: ""
@@ -461,35 +461,37 @@ spec:
     metadata:
       labels: { app: vllm-nemotron-text }
     spec:
+      runtimeClassName: nvidia
       nodeSelector:
         kubernetes.io/hostname: spark-02
       containers:
         - name: vllm
-          image: nvcr.io/nvidia/vllm:26.01-py3  # DGX Spark-validated (alt: scitrera/dgx-spark-vllm:0.14.0-t4)
+          image: ghcr.io/elizabetht/token-labs/vllm-serve:v0.4.0  # DGX Spark-validated (alt: scitrera/dgx-spark-vllm:0.14.0-t4)
           ports:
             - containerPort: 8000
           env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: token
             - name: HUGGING_FACE_HUB_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: hf-token
                   key: token
-          command: ["python3", "-m", "vllm.entrypoints.openai.api_server"]
+            - name: FLASHINFER_DISABLE_VERSION_CHECK
+              value: "1"
           resources:
             limits:
               nvidia.com/gpu: 1
           args:
-            - "--model"
-            - "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"
-            - "--served-model-name"
-            - "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"
+            - "meta-llama/Llama-3.1-8B-Instruct"
+            - "--trust-remote-code"
+            - "--attention-backend"
+            - "FLASHINFER"
             - "--port"
             - "8000"
-            - "--trust-remote-code"
-            - "--max-num-seqs"
-            - "8"
-            - "--tensor-parallel-size"
-            - "1"
           volumeMounts:
             - name: hf-cache
               mountPath: /root/.cache/huggingface
@@ -528,14 +530,20 @@ spec:
     metadata:
       labels: { app: vllm-nemotron-vl }
     spec:
+      runtimeClassName: nvidia
       nodeSelector:
         kubernetes.io/hostname: spark-01
       containers:
         - name: vllm
-          image: nvcr.io/nvidia/vllm:26.01-py3  # DGX Spark-validated (alt: scitrera/dgx-spark-vllm:0.14.0-t4)
+          image: ghcr.io/elizabetht/token-labs/vllm-serve:v0.4.0  # DGX Spark-validated (alt: scitrera/dgx-spark-vllm:0.14.0-t4)
           ports:
             - containerPort: 5566
           env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: token
             - name: HUGGING_FACE_HUB_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -543,26 +551,18 @@ spec:
                   key: token
             - name: VLLM_VIDEO_LOADER_BACKEND
               value: "opencv"
+            - name: FLASHINFER_DISABLE_VERSION_CHECK
+              value: "1"
           resources:
             limits:
               nvidia.com/gpu: 1
-          command: ["python3", "-m", "vllm.entrypoints.openai.api_server"]
           args:
-            - "--model"
-            - "nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16"
-            - "--served-model-name"
-            - "nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16"
+            - "nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-FP8"
             - "--trust-remote-code"
-            - "--max-model-len"
-            - "16384"  # OCR use-case; raise for long videos
-            - "--data-parallel-size"
-            - "1"
+            - "--attention-backend"
+            - "FLASHINFER"
             - "--port"
             - "5566"
-            - "--allowed-local-media-path"
-            - "/"
-            - "--video-pruning-rate"
-            - "0"
           volumeMounts:
             - name: hf-cache
               mountPath: /root/.cache/huggingface
@@ -582,13 +582,4 @@ spec:
     - name: http
       port: 5566
       targetPort: 5566
----
-# HF token secret (replace with your real token; don't commit it)
-apiVersion: v1
-kind: Secret
-metadata:
-  name: hf-token
-  namespace: spellingbee
-type: Opaque
-stringData:
-  token: "REPLACE_ME"
+
