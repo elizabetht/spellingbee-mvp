@@ -407,6 +407,10 @@ def turn_sentence(session_id: str = Form(...)):
     
     word = words[idx]
     
+    # Basic validation - ensure word contains only letters
+    if not word or not word.isalpha():
+        raise HTTPException(status_code=400, detail="Invalid word")
+    
     # Use Nemotron text LLM to generate a sentence
     system = "You are a helpful assistant that creates example sentences for spelling practice."
     user = f"Use the word '{word}' in a simple sentence suitable for a 9-year-old. Output only the sentence, nothing else."
@@ -419,8 +423,8 @@ def turn_sentence(session_id: str = Form(...)):
             temperature=0.7,
             max_tokens=100,
         )
-        # Clean up the sentence (remove quotes if present)
-        sentence = sentence.strip().strip('"').strip("'")
+        # Clean up the sentence (remove surrounding quotes)
+        sentence = sentence.strip().strip('"\'"')
         return {"sentence": sentence}
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Failed to generate sentence: {e}")
