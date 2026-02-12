@@ -79,7 +79,7 @@ spec:
                   name: magpie-tts-key
                   key: api-key
             - name: MAGPIE_TTS_VOICE
-              value: "Magpie-Multilingual.EN-US.Sofia"
+              value: "Magpie-Multilingual.EN-US.Pascal"
             - name: ELEVENLABS_API_KEY
               valueFrom:
                 secretKeyRef:

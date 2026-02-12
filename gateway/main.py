@@ -33,7 +33,7 @@ ASR_TIMEOUT_S = float(os.getenv("ASR_TIMEOUT_S", "30"))
 MAGPIE_TTS_URL = os.getenv("MAGPIE_TTS_URL", "grpc.nvcf.nvidia.com:443")
 MAGPIE_TTS_FUNCTION_ID = os.getenv("MAGPIE_TTS_FUNCTION_ID", "877104f7-e885-42b9-8de8-f6e4c6303969")
 MAGPIE_TTS_API_KEY = os.getenv("MAGPIE_TTS_API_KEY", "")
-MAGPIE_TTS_VOICE = os.getenv("MAGPIE_TTS_VOICE", "Magpie-Multilingual.EN-US.Sofia")
+MAGPIE_TTS_VOICE = os.getenv("MAGPIE_TTS_VOICE", "Magpie-Multilingual.EN-US.Pascal")
 MAGPIE_TTS_LANGUAGE = os.getenv("MAGPIE_TTS_LANGUAGE", "en-US")
 MAGPIE_TTS_USE_SSL = os.getenv("MAGPIE_TTS_USE_SSL", "true").lower() == "true"
 
