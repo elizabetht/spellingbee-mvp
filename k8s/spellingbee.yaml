@@ -463,7 +463,7 @@ spec:
     spec:
       runtimeClassName: nvidia
       nodeSelector:
-        kubernetes.io/hostname: spark-02
+        nvidia.com/gpu.product: NVIDIA-GB10
       containers:
         - name: vllm
           image: ghcr.io/elizabetht/token-labs/vllm-serve:v0.4.0  # DGX Spark-validated (alt: scitrera/dgx-spark-vllm:0.14.0-t4)
@@ -532,7 +532,7 @@ spec:
     spec:
       runtimeClassName: nvidia
       nodeSelector:
-        kubernetes.io/hostname: spark-01
+        nvidia.com/gpu.product: NVIDIA-GB10
       containers:
         - name: vllm
           image: ghcr.io/elizabetht/token-labs/vllm-serve:v0.4.0  # DGX Spark-validated (alt: scitrera/dgx-spark-vllm:0.14.0-t4)
