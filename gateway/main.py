@@ -348,9 +348,8 @@ def _magpie_tts(text: str) -> bytes:
         ("authorization", f"Bearer {MAGPIE_TTS_API_KEY}"),
     ]
     auth = riva.client.Auth(
-        ssl_cert=None,
-        use_ssl=MAGPIE_TTS_USE_SSL,
         uri=MAGPIE_TTS_URL,
+        use_ssl=MAGPIE_TTS_USE_SSL,
         metadata_args=metadata,
     )
     tts_service = riva.client.SpeechSynthesisService(auth)
