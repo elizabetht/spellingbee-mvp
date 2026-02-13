@@ -381,9 +381,13 @@ async function handsFreeLoop() {
       state.handsFreeActive = false;
       showDone();
       if (state.wrongWords.length > 0) {
-        await speakAndWait(`Nice work! You have ${state.wrongWords.length} word${state.wrongWords.length !== 1 ? "s" : ""} to review. Press Review These Words when you're ready.`);
+        const msg = `Nice work! Now let's practice the ${state.wrongWords.length} word${state.wrongWords.length !== 1 ? "s" : ""} you missed.`;
+        await speakAndWait(msg);
+        // Auto-start review round after 2-second delay
+        await new Promise(r => setTimeout(r, 2000));
+        startReviewRound();
       } else {
-        await speakAndWait("You got everything right! Amazing!");
+        await speakAndWait("You got everything right! 🌟");
       }
       return;
     }
@@ -555,10 +559,12 @@ function showDone() {
   wl.innerHTML = "";
   wl.classList.add("hidden");
   if (state.wrongWords.length > 0) {
-    $("wrongWordsMsg").textContent = `${state.wrongWords.length} word${state.wrongWords.length !== 1 ? "s" : ""} to review`;
-    $("btnReviewWrong").classList.remove("hidden");
+    $("wrongWordsMsg").textContent = `Nice work! Now let's practice the ${state.wrongWords.length} word${state.wrongWords.length !== 1 ? "s" : ""} you missed.`;
+    $("reviewTransition").classList.remove("hidden");
+    $("btnReviewWrong").classList.add("hidden");
   } else {
-    $("wrongWordsMsg").textContent = "No mistakes — perfect score!";
+    $("wrongWordsMsg").textContent = "You got everything right! 🌟";
+    $("reviewTransition").classList.add("hidden");
     $("btnReviewWrong").classList.add("hidden");
     clearSavedSession();
   }
