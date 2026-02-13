@@ -15,6 +15,7 @@ const state = {
   wrongWords: [],
   wordsCompleted: 0,
   originalWords: [],
+  reviewTimeout: null,
 };
 
 const MIN_WORDS = 25;
@@ -381,9 +382,15 @@ async function handsFreeLoop() {
       state.handsFreeActive = false;
       showDone();
       if (state.wrongWords.length > 0) {
-        await speakAndWait(`Nice work! You have ${state.wrongWords.length} word${state.wrongWords.length !== 1 ? "s" : ""} to review. Press Review These Words when you're ready.`);
+        const msg = `Nice work! Now let's practice the ${state.wrongWords.length} word${state.wrongWords.length !== 1 ? "s" : ""} you missed.`;
+        await speakAndWait(msg);
+        // Auto-start review round after 2-second delay
+        state.reviewTimeout = setTimeout(() => {
+          state.reviewTimeout = null;
+          startReviewRound();
+        }, 2000);
       } else {
-        await speakAndWait("You got everything right! Amazing!");
+        await speakAndWait("You got everything right! Great job!");
       }
       return;
     }
@@ -544,6 +551,10 @@ function stopEverything() {
   state.handsFreeActive = false;
   cleanupMic();
   if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+  if (state.reviewTimeout) {
+    clearTimeout(state.reviewTimeout);
+    state.reviewTimeout = null;
+  }
   if ("speechSynthesis" in window) window.speechSynthesis.cancel();
 }
 
@@ -555,10 +566,12 @@ function showDone() {
   wl.innerHTML = "";
   wl.classList.add("hidden");
   if (state.wrongWords.length > 0) {
-    $("wrongWordsMsg").textContent = `${state.wrongWords.length} word${state.wrongWords.length !== 1 ? "s" : ""} to review`;
-    $("btnReviewWrong").classList.remove("hidden");
+    $("wrongWordsMsg").textContent = `Nice work! Now let's practice the ${state.wrongWords.length} word${state.wrongWords.length !== 1 ? "s" : ""} you missed.`;
+    $("reviewTransition").classList.remove("hidden");
+    $("btnReviewWrong").classList.add("hidden");
   } else {
-    $("wrongWordsMsg").textContent = "No mistakes — perfect score!";
+    $("wrongWordsMsg").textContent = "You got everything right! 🌟";
+    $("reviewTransition").classList.add("hidden");
     $("btnReviewWrong").classList.add("hidden");
     clearSavedSession();
   }
@@ -607,8 +620,8 @@ $("btnEditList").onclick = () => {
 
 // Restart (from done screen)
 $("btnRestart").onclick = () => {
+  stopEverything();
   state.sessionId = null;
-  state.handsFreeActive = false;
   state.wrongWords = [];
   state.wordsCompleted = 0;
   showStage("stageSetup");
@@ -618,6 +631,10 @@ $("btnRestart").onclick = () => {
 // Auto-start a review round with wrong words
 async function startReviewRound() {
   const reviewWords = [...state.wrongWords];
+  if (reviewWords.length === 0) {
+    // No words to review (possibly cancelled)
+    return;
+  }
   state.wrongWords = [];  // Reset for this round
   try {
     const data = await api("/session/start", {
