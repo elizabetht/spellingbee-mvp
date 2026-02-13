@@ -619,6 +619,8 @@ def turn_ask(session_id: str = Form(...)):
         prompt_text += f" {word} means {definition}. For example: {sentence}."
     elif definition:
         prompt_text += f" {word} means {definition}."
+    elif sentence:
+        prompt_text += f" For example: {sentence}."
 
     return {"session_id": session_id, "idx": idx, "word": word, "prompt_text": prompt_text}
 
