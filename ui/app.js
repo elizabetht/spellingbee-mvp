@@ -15,6 +15,7 @@ const state = {
   wrongWords: [],
   wordsCompleted: 0,
   originalWords: [],
+  reviewTimeout: null,
 };
 
 const MIN_WORDS = 25;
@@ -384,10 +385,12 @@ async function handsFreeLoop() {
         const msg = `Nice work! Now let's practice the ${state.wrongWords.length} word${state.wrongWords.length !== 1 ? "s" : ""} you missed.`;
         await speakAndWait(msg);
         // Auto-start review round after 2-second delay
-        await new Promise(r => setTimeout(r, 2000));
-        startReviewRound();
+        state.reviewTimeout = setTimeout(() => {
+          state.reviewTimeout = null;
+          startReviewRound();
+        }, 2000);
       } else {
-        await speakAndWait("You got everything right! 🌟");
+        await speakAndWait("You got everything right! Great job!");
       }
       return;
     }
@@ -548,6 +551,10 @@ function stopEverything() {
   state.handsFreeActive = false;
   cleanupMic();
   if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+  if (state.reviewTimeout) {
+    clearTimeout(state.reviewTimeout);
+    state.reviewTimeout = null;
+  }
   if ("speechSynthesis" in window) window.speechSynthesis.cancel();
 }
 
@@ -613,8 +620,8 @@ $("btnEditList").onclick = () => {
 
 // Restart (from done screen)
 $("btnRestart").onclick = () => {
+  stopEverything();
   state.sessionId = null;
-  state.handsFreeActive = false;
   state.wrongWords = [];
   state.wordsCompleted = 0;
   showStage("stageSetup");
