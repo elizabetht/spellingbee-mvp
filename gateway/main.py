@@ -401,7 +401,7 @@ def _generate_word_context(session: dict, word: str) -> dict:
             VLLM_TEXT_BASE,
             VLLM_TEXT_MODEL,
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-            temperature=0.3,
+            temperature=0.0,
             max_tokens=150,
             timeout=8,
         )
@@ -596,10 +596,29 @@ def turn_ask(session_id: str = Form(...)):
 
     word = words[idx]
 
+    # Generate word context (definition + example sentence)
+    try:
+        ctx = _generate_word_context(s, word)
+        definition = ctx.get("definition", "")
+        sentence = ctx.get("sentence", "")
+    except Exception as exc:
+        print(f"[TurnAsk] Failed to generate word context for '{word}': {exc}")
+        definition = ""
+        sentence = ""
+
+    # Build prompt text
     if idx == 0:
+        # First word: include instruction to say one letter at a time
         prompt_text = f"Spell {word}. Say one letter at a time."
     else:
+        # Subsequent words
         prompt_text = f"Spell {word}."
+    
+    # Append definition and example sentence if available
+    if definition and sentence:
+        prompt_text += f" {word} means {definition} For example: {sentence}"
+    elif definition:
+        prompt_text += f" {word} means {definition}"
 
     return {"session_id": session_id, "idx": idx, "word": word, "prompt_text": prompt_text}
 
