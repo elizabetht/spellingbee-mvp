@@ -351,6 +351,7 @@ textarea:focus { border-color: var(--accent); }
 .done-card h2 { font-size: 2rem; font-weight: 800; margin-bottom: 10px; }
 .final-score { font-size: 1.3rem; color: var(--accent); font-weight: 700; margin-bottom: 24px; }
 .wrong-words-msg { font-size: 1rem; color: var(--text2); margin-bottom: 8px; }
+.review-transition { font-size: 0.95rem; color: var(--accent); font-style: italic; margin-top: 12px; }
 .wrong-words-list {
   list-style: none;
   padding: 0;

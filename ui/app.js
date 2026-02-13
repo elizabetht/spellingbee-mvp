@@ -624,6 +624,10 @@ $("btnRestart").onclick = () => {
 // Auto-start a review round with wrong words
 async function startReviewRound() {
   const reviewWords = [...state.wrongWords];
+  if (reviewWords.length === 0) {
+    // No words to review (possibly cancelled)
+    return;
+  }
   state.wrongWords = [];  // Reset for this round
   try {
     const data = await api("/session/start", {
