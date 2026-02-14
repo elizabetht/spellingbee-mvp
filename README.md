@@ -40,58 +40,303 @@ spellingbee-mvp/
 | **Nemotron VL** | NVIDIA `Nemotron-Nano-12B-v2-VL-FP8` via vLLM. Single model handles all AI tasks: (1) extracts spelling words from uploaded photos, (2) generates child-friendly definitions and example sentences, (3) LLM fallback for letter parsing when deterministic matching fails. |
 | **Magpie TTS** | NVIDIA Magpie Multilingual TTS via Riva gRPC (NVCF). Primary voice (`Sofia`). Falls back to ElevenLabs API, then browser `SpeechSynthesis`. |
 
-### Sequence Diagram
+### Component Architecture
+
+```mermaid
+graph TB
+    subgraph Browser["🌐 Browser (Child's Device)"]
+        HTML["index.html + style.css<br/>Vanilla HTML/CSS UI"]
+        JS["app.js<br/>Practice loop, VAD,<br/>state machine"]
+        WSA["Web Speech API<br/>Live transcription"]
+        LS["localStorage<br/>sessionId persistence"]
+    end
+
+    subgraph K8s["☸️ Kubernetes Cluster (DGX Spark)"]
+        subgraph GW["Gateway Pod (FastAPI)"]
+            Intent["Intent Classifier<br/>Regex patterns"]
+            Session["Session Manager<br/>Redis read/write, 7-day TTL"]
+            Parser["Letter Parser<br/>Deterministic + LLM fallback"]
+            Router["API Router<br/>/extract, /session, /turn, /tts, /word"]
+        end
+        
+        subgraph VL["Nemotron VL Pod (vLLM)"]
+            Model["nvidia/NVIDIA-Nemotron-Nano-<br/>12B-v2-VL-FP8<br/>1× GB10 GPU"]
+        end
+        
+        subgraph RD["Redis Pod"]
+            RedisDB["redis:7-alpine<br/>AOF persistence"]
+            PVC["PVC (1 Gi)<br/>appendonly.aof"]
+        end
+
+        subgraph ASR["ASR Pod (CPU)"]
+            Whisper["faster-whisper<br/>base.en model"]
+        end
+    end
+
+    subgraph External["☁️ External APIs (NVCF)"]
+        Magpie["NVIDIA Magpie TTS<br/>Riva gRPC, voice: Sofia"]
+        Eleven["ElevenLabs TTS<br/>Fallback"]
+    end
+
+    HTML <-->|HTTP| JS
+    JS <-->|SpeechRecognition| WSA
+    JS <-->|getItem/setItem| LS
+    JS <-->|"REST API calls<br/>(transcript, images, sessions)"| Router
+    WSA -.->|"live transcript<br/>(via app.js to /classify_intent,<br/>/turn/answer)"| Router
+
+    Router --> Intent
+    Router --> Session
+    Router --> Parser
+    
+    Router <-->|"POST /v1/chat/completions<br/>(text + vision)"| Model
+    Session <-->|HGET/HSET/DEL| RedisDB
+    RedisDB --- PVC
+    Router <-->|"POST /asr<br/>(WAV fallback)"| Whisper
+    Router <-->|"gRPC Synthesize"| Magpie
+    Router <-.->|"REST fallback"| Eleven
+```
+
+### Sequence Diagrams
+
+#### Flow 1 — Word List Setup (Image Upload)
+
+```mermaid
+sequenceDiagram
+    participant Parent
+    participant UI as Browser
+    participant GW as Gateway
+    participant VL as Nemotron VL
+
+    Note over Parent, VL: Flow 1 — Word List Setup
+
+    Parent->>UI: Upload photo of word list
+    UI->>UI: Resize image (max 800px)
+    UI->>GW: POST /extract_words {base64 image}
+    GW->>GW: Build vision prompt:<br/>"Extract the list of English words…"
+    GW->>VL: POST /v1/chat/completions<br/>{image_url + prompt}
+    VL-->>GW: JSON word array
+    GW-->>UI: {words: ["cat","dog","fish",...]}
+    UI->>UI: Display editable word list
+    Parent->>UI: Review / edit words
+    Parent->>UI: Click "Start Practice"
+    UI->>GW: POST /session/start {word_list}
+    GW-->>UI: {session_id, word_list}
+    UI->>UI: Store sessionId in localStorage
+```
+
+#### Flow 2 — Spelling Practice Loop
 
 ```mermaid
 sequenceDiagram
     participant Child
-    participant Browser as UI (Browser)
-    participant GW as Gateway (FastAPI)
+    participant UI as Browser
+    participant GW as Gateway
+    participant VL as Nemotron VL
+    participant Redis
     participant TTS as Magpie TTS
-    participant LLM as Nemotron VL 12B
 
-    Note over Child, LLM: Setup
-    Child->>Browser: Upload word list photo
-    Browser->>Browser: Resize image (max 1536px)
-    Browser->>GW: POST /extract_words (image)
-    GW->>LLM: Image → JSON extraction
-    LLM-->>GW: {"words": ["necessary", "dolphin", ...]}
-    GW-->>Browser: Word list
-    Child->>Browser: Start Practice
+    Note over Child, TTS: Flow 2 — Spelling Practice Loop (per word)
 
-    Note over Child, LLM: Practice (voice-driven loop)
-    Browser->>GW: POST /session/start (words)
-    GW-->>Browser: session_id, first word
+    UI->>GW: POST /word/context {word, type: "definition"}
+    GW->>VL: "Child-friendly definition of <word>"
+    VL-->>GW: Definition text
+    GW-->>UI: {context: definition}
 
-    loop Each word
-        Browser->>GW: POST /turn/ask (session_id)
-        GW->>LLM: Generate definition + sentence
-        LLM-->>GW: {"definition": "...", "sentence": "..."}
-        GW-->>Browser: prompt_text
-        Browser->>TTS: POST /tts (prompt)
-        TTS-->>Browser: Audio (WAV)
-        Browser->>Child: "Spell necessary. It means needed or required."
+    UI->>GW: POST /tts {text: "Spell the word cat. Cat means..."}
+    GW->>TTS: gRPC Synthesize (Magpie, Sofia)
+    TTS-->>GW: WAV audio
+    GW-->>UI: Audio bytes
+    UI->>Child: 🔊 Word + definition spoken
 
-        Child->>Browser: Speaks letters: "N-E-C-E-S-S-A-R-Y"
-        Browser->>Browser: VAD: 3s silence → stop recording
-        Browser->>GW: POST /turn/answer (transcript + audio)
-        GW->>GW: Deterministic parse (homophones, NATO)
-        alt No match
-            GW->>LLM: LLM letter extraction
-            LLM-->>GW: {"letters": [...]}
+    Note over Child, UI: Child spells aloud: "C - A - T"
+    Child->>UI: Voice input
+    UI->>UI: Web Speech API → real-time transcript
+
+    UI->>GW: POST /classify_intent {text: "C A T"}
+    GW->>GW: Regex match → intent: "attempt_spelling"
+    GW-->>UI: {intent: "attempt_spelling"}
+
+    UI->>GW: POST /turn/answer {session_id, text: "C A T"}
+    GW->>GW: parse_letters_deterministic("C A T")
+    alt Deterministic parse succeeds
+        GW->>GW: letters = ["C","A","T"]
+    else Fallback to LLM
+        GW->>VL: "Extract individual letters from: C A T"
+        VL-->>GW: ["C","A","T"]
+    end
+    GW->>GW: Compare letters vs word → correct!
+    GW->>GW: Pick random praise phrase
+    GW->>Redis: HSET session (update idx, results)
+    GW-->>UI: {correct: true, feedback: "Brilliant! cat is correct!"}
+
+    UI->>GW: POST /tts {text: "Brilliant! cat is correct!"}
+    GW->>TTS: Synthesize
+    TTS-->>GW: WAV
+    GW-->>UI: Audio
+    UI->>Child: 🔊 Feedback spoken
+    Note over UI: Advance to next word or showDone()
+```
+
+#### Flow 3 — Guardrails (Off-Topic Redirect)
+
+```mermaid
+sequenceDiagram
+    participant Child
+    participant UI as Browser
+    participant GW as Gateway
+    participant TTS as Magpie TTS
+
+    Note over Child, TTS: Flow 3 — Guardrails (off-topic redirect)
+
+    Child->>UI: "Tell me a joke"
+    UI->>UI: Web Speech API → transcript
+    UI->>GW: POST /classify_intent {transcript}
+    GW->>GW: Regex OFF_TOPIC_PATTERN → intent: "off_topic"
+    GW-->>UI: {intent: "off_topic", message: "I can only help with spelling..."}
+    UI->>GW: POST /tts {text: redirect message}
+    GW->>TTS: Synthesize
+    TTS-->>GW: WAV audio
+    GW-->>UI: Audio bytes
+    UI->>Child: 🔊 "I can only help with spelling practice!"
+    Note over UI: Loop continues — no attempt counted
+```
+
+#### Flow 4 — Help Commands (definition, sentence, repeat, skip)
+
+```mermaid
+sequenceDiagram
+    participant Child
+    participant UI as Browser
+    participant GW as Gateway
+    participant VL as Nemotron VL
+    participant TTS as Magpie TTS
+
+    Note over Child, TTS: Flow 4 — Help Commands during practice
+
+    rect rgb(230, 245, 255)
+        Note right of Child: "What does it mean?"
+        Child->>UI: "definition"
+        UI->>GW: POST /classify_intent {transcript}
+        GW-->>UI: {intent: "ask_definition"}
+        UI->>GW: POST /word/context {word, type: "definition"}
+        GW->>VL: "Give a child-friendly definition of <word>"
+        VL-->>GW: Definition text
+        GW-->>UI: {context: "A cat is a small furry pet..."}
+        UI->>GW: POST /tts {text: definition}
+        GW->>TTS: Synthesize
+        TTS-->>GW: WAV audio
+        GW-->>UI: Audio
+        UI->>Child: 🔊 Definition spoken aloud
+    end
+
+    rect rgb(255, 245, 230)
+        Note right of Child: "Use it in a sentence"
+        Child->>UI: "sentence"
+        UI->>GW: POST /classify_intent {transcript}
+        GW-->>UI: {intent: "ask_sentence"}
+        UI->>GW: POST /word/context {word, type: "sentence"}
+        GW->>VL: "Use <word> in a simple sentence"
+        VL-->>GW: Sentence text
+        GW-->>UI: {context: "The cat sat on the mat."}
+        UI->>GW: POST /tts {text: sentence}
+        GW->>TTS: Synthesize → WAV
+        GW-->>UI: Audio
+        UI->>Child: 🔊 Sentence spoken aloud
+    end
+
+    rect rgb(245, 255, 230)
+        Note right of Child: "Say it again"
+        Child->>UI: "repeat"
+        UI->>GW: POST /classify_intent {transcript}
+        GW-->>UI: {intent: "repeat"}
+        Note over UI: Re-speak current word via TTS
+        UI->>Child: 🔊 Word repeated
+    end
+
+    rect rgb(255, 230, 245)
+        Note right of Child: "Skip this word"
+        Child->>UI: "skip"
+        UI->>GW: POST /classify_intent {transcript}
+        GW-->>UI: {intent: "skip"}
+        Note over UI: Mark word skipped, advance index
+        UI->>Child: 🔊 "OK, let's move to the next word"
+    end
+```
+
+#### Flow 5 — Session Resume
+
+```mermaid
+sequenceDiagram
+    participant UI as Browser
+    participant LS as localStorage
+    participant GW as Gateway
+    participant Redis
+
+    Note over UI, Redis: Flow 5 — Session Resume on page load
+
+    UI->>UI: Page loads / "Restart" / "Edit List" clicked
+    UI->>LS: Read sessionId
+    alt sessionId exists
+        UI->>GW: GET /session/{sessionId}
+        GW->>Redis: HGETALL session:{id}
+        alt Session found in Redis
+            Redis-->>GW: Session data (words, idx, results)
+            GW-->>UI: 200 {word_list, current_index, results}
+            UI->>UI: Show resume banner<br/>"Resume where you left off?"
+            alt User clicks "Resume"
+                UI->>GW: POST /session/resume {session_id}
+                GW->>Redis: Load full session state
+                Redis-->>GW: Session state
+                GW-->>UI: {word_list, current_index, results, ...}
+                UI->>UI: Restore practice at current_index
+                Note over UI: Practice continues mid-list
+            else User clicks "Start Over"
+                UI->>LS: Clear sessionId
+                UI->>UI: Show word list setup
+            end
+        else Session expired / not found
+            Redis-->>GW: nil
+            GW-->>UI: 404
+            UI->>LS: Clear stale sessionId
+            UI->>UI: Show word list setup
         end
-        GW-->>Browser: correct/wrong + feedback
-        Browser->>TTS: POST /tts (feedback)
-        Browser->>Child: "Nice! Necessary is correct."
+    else No sessionId
+        UI->>UI: Show word list setup
     end
+```
 
-    Note over Child, LLM: Review round (wrong words only)
+#### Flow 6 — Review Round (Practice Wrong Words)
+
+```mermaid
+sequenceDiagram
+    participant Child
+    participant UI as Browser
+    participant GW as Gateway
+    participant Redis
+    participant TTS as Magpie TTS
+
+    Note over Child, TTS: Flow 6 — Review Round (wrong words retry)
+
+    UI->>UI: All words attempted → showDone()
+    UI->>GW: POST /session/save (final progress)
+    GW->>Redis: HSET session (save final state)
+    UI->>Child: 🔊 "Great job! You got 7 out of 10 correct!"
+    UI->>UI: Display results table<br/>(✅ correct / ❌ wrong for each word)
+
     alt Has wrong words
-        Browser->>GW: POST /session/start (wrong_words)
-        Note over Browser, GW: Repeats practice loop
+        UI->>UI: Show "Practice Wrong Words" button
+        Child->>UI: Clicks "Practice Wrong Words"
+        UI->>UI: Collect wrong words as new list
+        UI->>GW: POST /session/start {word_list: [wrong words]}
+        GW->>Redis: Create new session with wrong words only
+        Redis-->>GW: New session_id
+        GW-->>UI: {session_id, word_list}
+        UI->>UI: Store new sessionId in localStorage
+        Note over UI, TTS: Practice loop restarts (Flow 2)<br/>with only the misspelled words
+    else All correct
+        UI->>Child: 🔊 "Perfect score! You're a spelling champion!"
+        Note over UI: Show celebration screen
     end
-
-    Browser->>Child: Done! Score displayed.
 ```
 
 ### API Endpoints
