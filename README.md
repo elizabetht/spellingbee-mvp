@@ -12,7 +12,7 @@ An AI-powered spelling practice app for kids, built for the NVIDIA GTC Hackathon
 
 4. **Ask for help** — During practice, the child can say “what does it mean?” or “definition” and the app will speak the definition again without counting it as a spelling attempt. Other allowed commands: “repeat”, “use it in a sentence”, and “skip”.
 
-5. **Guardrails** — If the child asks off-topic questions (“tell me a joke”, “who is the president”), the app gently redirects back to spelling. A server-side intent classifier ensures only spelling-relevant interactions are processed.
+5. **Guardrails (NeMo Guardrails + Colang)** — If the child asks off-topic questions ("tell me a joke", "who is the president"), the app gently redirects back to spelling. NVIDIA NeMo Guardrails with Colang intent definitions ensure only spelling-relevant interactions are processed.
 
 6. **Auto-review** — Any words the child gets wrong are collected and automatically replayed in a review round at the end.
 
@@ -34,7 +34,7 @@ spellingbee-mvp/
 | Component | Role |
 |-----------|------|
 | **UI** | Vanilla HTML/JS/CSS served by nginx. Three stages: Setup → Session → Done. Auto-starts a voice-driven loop on practice start — speaks prompts via TTS, records via mic with VAD silence detection, submits transcript, speaks feedback. Client-side image resize before upload. |
-| **Gateway** | FastAPI (Python). Central orchestrator — handles `/extract_words`, `/session/start`, `/session/resume`, `/turn/ask`, `/turn/answer`, `/classify_intent`, `/word/context`, `/tts`. Manages sessions in Redis, runs deterministic letter parsing with LLM fallback, generates child-friendly definitions, tracks wrong words. Server-side intent classifier acts as guardrails. |
+| **Gateway** | FastAPI (Python). Central orchestrator — handles `/extract_words`, `/session/start`, `/session/resume`, `/turn/ask`, `/turn/answer`, `/classify_intent`, `/word/context`, `/tts`. Manages sessions in Redis, runs deterministic letter parsing with LLM fallback, generates child-friendly definitions, tracks wrong words. NeMo Guardrails (Colang) classifies intents and blocks off-topic interactions. |
 | **Redis** | Session persistence store. Stores session state (word list, progress, scores, wrong/skipped words) with 7-day TTL. Survives gateway restarts. AOF-enabled for durability. |
 | **ASR** | `faster-whisper` with Whisper `base.en` model (CPU-only). Also supports browser Web Speech API as a zero-latency alternative — the browser sends the live transcript directly. |
 | **Nemotron VL** | NVIDIA `Nemotron-Nano-12B-v2-VL-FP8` via vLLM. Single model handles all AI tasks: (1) extracts spelling words from uploaded photos, (2) generates child-friendly definitions and example sentences, (3) LLM fallback for letter parsing when deterministic matching fails. |
@@ -43,57 +43,25 @@ spellingbee-mvp/
 ### Component Architecture
 
 ```mermaid
-graph TB
-    subgraph Browser["🌐 Browser (Child's Device)"]
-        HTML["index.html + style.css<br/>Vanilla HTML/CSS UI"]
-        JS["app.js<br/>Practice loop, VAD,<br/>state machine"]
-        WSA["Web Speech API<br/>Live transcription"]
-        LS["localStorage<br/>sessionId persistence"]
+graph LR
+    Child["🧒 Child"]
+    Browser["🌐 Browser<br/>UI + Web Speech API<br/>+ localStorage"]
+
+    subgraph K8s["☸️ Kubernetes ─ DGX Spark"]
+        Gateway["⚙️ Gateway<br/>(FastAPI)<br/>Guardrails · Sessions<br/>Letter Parser"]
+        VL["🧠 Nemotron VL 12B<br/>(vLLM · 1 GPU)<br/>Vision + Text"]
+        Redis["💾 Redis<br/>Session Store"]
+        ASR["🎙️ ASR<br/>faster-whisper"]
     end
 
-    subgraph K8s["☸️ Kubernetes Cluster (DGX Spark)"]
-        subgraph GW["Gateway Pod (FastAPI)"]
-            Intent["Intent Classifier<br/>Regex patterns"]
-            Session["Session Manager<br/>Redis read/write, 7-day TTL"]
-            Parser["Letter Parser<br/>Deterministic + LLM fallback"]
-            Router["API Router<br/>/extract, /session, /turn, /tts, /word"]
-        end
-        
-        subgraph VL["Nemotron VL Pod (vLLM)"]
-            Model["nvidia/NVIDIA-Nemotron-Nano-<br/>12B-v2-VL-FP8<br/>1× GB10 GPU"]
-        end
-        
-        subgraph RD["Redis Pod"]
-            RedisDB["redis:7-alpine<br/>AOF persistence"]
-            PVC["PVC (1 Gi)<br/>appendonly.aof"]
-        end
+    TTS["🔊 Magpie TTS<br/>(NVIDIA NVCF)"]
 
-        subgraph ASR["ASR Pod (CPU)"]
-            Whisper["faster-whisper<br/>base.en model"]
-        end
-    end
-
-    subgraph External["☁️ External APIs (NVCF)"]
-        Magpie["NVIDIA Magpie TTS<br/>Riva gRPC, voice: Sofia"]
-        Eleven["ElevenLabs TTS<br/>Fallback"]
-    end
-
-    HTML <-->|HTTP| JS
-    JS <-->|SpeechRecognition| WSA
-    JS <-->|getItem/setItem| LS
-    JS <-->|"REST API calls<br/>(transcript, images, sessions)"| Router
-    WSA -.->|"live transcript<br/>(via app.js to /classify_intent,<br/>/turn/answer)"| Router
-
-    Router --> Intent
-    Router --> Session
-    Router --> Parser
-    
-    Router <-->|"POST /v1/chat/completions<br/>(text + vision)"| Model
-    Session <-->|HGET/HSET/DEL| RedisDB
-    RedisDB --- PVC
-    Router <-->|"POST /asr<br/>(WAV fallback)"| Whisper
-    Router <-->|"gRPC Synthesize"| Magpie
-    Router <-.->|"REST fallback"| Eleven
+    Child <-->|voice| Browser
+    Browser <-->|REST API| Gateway
+    Gateway <-->|LLM calls| VL
+    Gateway <-->|sessions| Redis
+    Gateway <-->|speech-to-text| ASR
+    Gateway <-->|text-to-speech| TTS
 ```
 
 ### Sequence Diagrams
@@ -363,10 +331,30 @@ Spoken letter recognition is the hardest problem. The app uses a multi-stage app
 3. **LLM fallback** — If deterministic result doesn't match the target word, sends the raw transcript to Nemotron VL for intelligent letter extraction
 4. **Whole-word match** — If SR recognized the target word itself from the letter-by-letter speech, accepts it as correct
 
+### Guardrails — NeMo Guardrails with Colang
+
+The app uses [NVIDIA NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) to keep interactions on-topic. Guardrails are defined using **Colang**, a modeling language purpose-built for conversational AI safety rails.
+
+**What is Colang?** Colang is a domain-specific language created by NVIDIA for defining conversational guardrails. Instead of writing complex classification logic in Python, you declare intents, example utterances, and dialog flows in a concise, readable format (`.co` files). Colang supports:
+
+- **Intent definitions** with example utterances — e.g., `define user ask definition` with samples like "what does it mean?", "tell me the definition"
+- **Bot response mappings** — what the system should do when an intent is detected
+- **Dialog flows** — multi-turn rules connecting user intents to bot actions
+- **Off-topic blocking** — a catch-all pattern that intercepts non-spelling utterances and returns a gentle redirect
+
+The guardrails config lives in `gateway/guardrails_config/`:
+
+| File | Purpose |
+|------|--------|
+| `config.yml` | Rails configuration — model connection, instructions, sample conversation, enabled rails |
+| `intents.co` | Colang definitions — allowed intents (`attempt_spelling`, `ask_definition`, `ask_sentence`, `repeat`, `skip`) and the `off_topic` catch-all |
+
+Allowed intents: `attempt_spelling`, `ask_definition`, `ask_sentence`, `repeat`, `skip`. Everything else is classified as `off_topic` and met with a redirect message like *"I can only help with spelling practice!"*
+
 ## Key Features
 
 - **Fully voice-driven** — no interaction needed during practice; speaks prompts, listens with VAD, speaks feedback automatically
-- **Server-side guardrails** — intent classifier restricts interactions to spelling-relevant commands only (spell, definition, repeat, sentence, skip); off-topic questions are gently redirected
+- **NeMo Guardrails (Colang)** — NVIDIA's guardrails framework with Colang intent definitions restricts interactions to spelling-relevant commands only (spell, definition, repeat, sentence, skip); off-topic questions are gently redirected
 - **Session memory (Redis)** — sessions persist across browser closes and gateway restarts; resume from exactly where you left off with 7-day TTL
 - **Image-to-word-list extraction** using Nemotron VL (FP8) vision-language model (same model handles all AI tasks)
 - **Word definitions & example sentences** — auto-spoken before each word, also available on demand (“what does it mean?”)
