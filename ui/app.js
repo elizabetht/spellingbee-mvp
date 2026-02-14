@@ -619,6 +619,8 @@ function showDone() {
     $("btnReviewWrong").classList.add("hidden");
     clearSavedSession();
   }
+  // Save progress before clearing sessionId so resume can find it
+  saveProgress();
   state.sessionId = null;
   showStage("stageDone");
 }
@@ -660,6 +662,7 @@ $("btnEditList").onclick = () => {
   if ("speechSynthesis" in window) window.speechSynthesis.cancel();
   showStage("stageSetup");
   showWordEditor();
+  checkResume();
 };
 
 // Restart (from done screen)
@@ -670,6 +673,7 @@ $("btnRestart").onclick = () => {
   state.wordsCompleted = 0;
   showStage("stageSetup");
   showWordEditor();
+  checkResume();
 };
 
 // Auto-start a review round with wrong words
@@ -702,7 +706,7 @@ async function startReviewRound() {
 showStage("stageSetup");
 
 // Check for a saved session to resume
-(async function checkResume() {
+async function checkResume() {
   const saved = await loadSavedSession();
   if (!saved) return;
   const remaining = saved.total - saved.idx;
@@ -746,4 +750,5 @@ showStage("stageSetup");
     clearSavedSession();
     $("resumeBanner").classList.add("hidden");
   };
-})();
+}
+checkResume();
