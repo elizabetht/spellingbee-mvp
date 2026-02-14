@@ -37,8 +37,7 @@ spellingbee-mvp/
 | **Gateway** | FastAPI (Python). Central orchestrator — handles `/extract_words`, `/session/start`, `/session/resume`, `/turn/ask`, `/turn/answer`, `/classify_intent`, `/word/context`, `/tts`. Manages sessions in Redis, runs deterministic letter parsing with LLM fallback, generates child-friendly definitions, tracks wrong words. Server-side intent classifier acts as guardrails. |
 | **Redis** | Session persistence store. Stores session state (word list, progress, scores, wrong/skipped words) with 7-day TTL. Survives gateway restarts. AOF-enabled for durability. |
 | **ASR** | `faster-whisper` with Whisper `base.en` model (CPU-only). Also supports browser Web Speech API as a zero-latency alternative — the browser sends the live transcript directly. |
-| **Nemotron VL** | NVIDIA `Nemotron-Nano-12B-v2-VL-FP8` via vLLM. Extracts spelling words from uploaded photos of word lists. |
-| **Text LLM** | Meta `Llama-3.1-8B-Instruct` via vLLM. Two roles: (1) LLM fallback for letter parsing when deterministic matching fails, (2) generates child-friendly word definitions and example sentences. |
+| **Nemotron VL** | NVIDIA `Nemotron-Nano-12B-v2-VL-FP8` via vLLM. Single model handles all AI tasks: (1) extracts spelling words from uploaded photos, (2) generates child-friendly definitions and example sentences, (3) LLM fallback for letter parsing when deterministic matching fails. |
 | **Magpie TTS** | NVIDIA Magpie Multilingual TTS via Riva gRPC (NVCF). Primary voice (`Sofia`). Falls back to ElevenLabs API, then browser `SpeechSynthesis`. |
 
 ### Sequence Diagram
@@ -49,26 +48,25 @@ sequenceDiagram
     participant Browser as UI (Browser)
     participant GW as Gateway (FastAPI)
     participant TTS as Magpie TTS
-    participant TextLLM as Llama 3.1 8B
-    participant VL as Nemotron VL
+    participant LLM as Nemotron VL 12B
 
-    Note over Child, VL: Setup
+    Note over Child, LLM: Setup
     Child->>Browser: Upload word list photo
     Browser->>Browser: Resize image (max 1536px)
     Browser->>GW: POST /extract_words (image)
-    GW->>VL: Image → JSON extraction
-    VL-->>GW: {"words": ["necessary", "dolphin", ...]}
+    GW->>LLM: Image → JSON extraction
+    LLM-->>GW: {"words": ["necessary", "dolphin", ...]}
     GW-->>Browser: Word list
     Child->>Browser: Start Practice
 
-    Note over Child, VL: Practice (voice-driven loop)
+    Note over Child, LLM: Practice (voice-driven loop)
     Browser->>GW: POST /session/start (words)
     GW-->>Browser: session_id, first word
 
     loop Each word
         Browser->>GW: POST /turn/ask (session_id)
-        GW->>TextLLM: Generate definition + sentence
-        TextLLM-->>GW: {"definition": "...", "sentence": "..."}
+        GW->>LLM: Generate definition + sentence
+        LLM-->>GW: {"definition": "...", "sentence": "..."}
         GW-->>Browser: prompt_text
         Browser->>TTS: POST /tts (prompt)
         TTS-->>Browser: Audio (WAV)
@@ -79,15 +77,15 @@ sequenceDiagram
         Browser->>GW: POST /turn/answer (transcript + audio)
         GW->>GW: Deterministic parse (homophones, NATO)
         alt No match
-            GW->>TextLLM: LLM letter extraction
-            TextLLM-->>GW: {"letters": [...]}
+            GW->>LLM: LLM letter extraction
+            LLM-->>GW: {"letters": [...]}
         end
         GW-->>Browser: correct/wrong + feedback
         Browser->>TTS: POST /tts (feedback)
         Browser->>Child: "Nice! Necessary is correct."
     end
 
-    Note over Child, VL: Review round (wrong words only)
+    Note over Child, LLM: Review round (wrong words only)
     alt Has wrong words
         Browser->>GW: POST /session/start (wrong_words)
         Note over Browser, GW: Repeats practice loop
@@ -117,7 +115,7 @@ Spoken letter recognition is the hardest problem. The app uses a multi-stage app
 
 1. **Deterministic parsing** — Maps phonetic sounds to letters using a homophone dictionary (~60 entries: "bee"→B, "cee"→C, "age"→H, "are"→R, etc.) and NATO alphabet support
 2. **Multi-character token splitting** — When speech recognition concatenates letter sounds into words (e.g., child spells N-E-C-E-S-S-A-R-Y but SR outputs "necessary"), splits into individual letters
-3. **LLM fallback** — If deterministic result doesn't match the target word, sends the raw transcript to Llama 3.1 for intelligent letter extraction
+3. **LLM fallback** — If deterministic result doesn't match the target word, sends the raw transcript to Nemotron VL for intelligent letter extraction
 4. **Whole-word match** — If SR recognized the target word itself from the letter-by-letter speech, accepts it as correct
 
 ## Key Features
@@ -125,7 +123,7 @@ Spoken letter recognition is the hardest problem. The app uses a multi-stage app
 - **Fully voice-driven** — no interaction needed during practice; speaks prompts, listens with VAD, speaks feedback automatically
 - **Server-side guardrails** — intent classifier restricts interactions to spelling-relevant commands only (spell, definition, repeat, sentence, skip); off-topic questions are gently redirected
 - **Session memory (Redis)** — sessions persist across browser closes and gateway restarts; resume from exactly where you left off with 7-day TTL
-- **Image-to-word-list extraction** using Nemotron VL (FP8) vision-language model
+- **Image-to-word-list extraction** using Nemotron VL (FP8) vision-language model (same model handles all AI tasks)
 - **Word definitions & example sentences** — auto-spoken before each word, also available on demand (“what does it mean?”)
 - **Deterministic + LLM letter parsing** with 60+ phonetic homophones, NATO alphabet, and intelligent fallback
 - **Wrong-word tracking & auto-review** — missed words automatically replayed in review rounds

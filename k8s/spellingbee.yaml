@@ -66,9 +66,9 @@ spec:
           imagePullPolicy: Always
           env:
             - name: VLLM_TEXT_BASE
-              value: "http://vllm-llama-31-8b:8000/v1"
+              value: "http://vllm-nemotron-vl:5566/v1"
             - name: VLLM_TEXT_MODEL
-              value: "meta-llama/Llama-3.1-8B-Instruct"
+              value: "nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-FP8"
             - name: VLLM_VL_BASE
               value: "http://vllm-nemotron-vl:5566/v1"
             - name: VLLM_VL_MODEL
@@ -115,79 +115,8 @@ spec:
       targetPort: 8080
 
 # -----------------------
-# OPTIONAL: GPU vLLM - Llama 3.1 8B (text)
-# -----------------------
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: vllm-llama-31-8b
-  namespace: spellingbee
-spec:
-  replicas: 1
-  strategy:
-    type: Recreate
-  selector:
-    matchLabels: { app: vllm-llama-31-8b }
-  template:
-    metadata:
-      labels: { app: vllm-llama-31-8b }
-    spec:
-      runtimeClassName: nvidia
-      nodeSelector:
-        nvidia.com/gpu.product: NVIDIA-GB10
-      containers:
-        - name: vllm
-          image: ghcr.io/elizabetht/token-labs/vllm-serve:v0.4.0  # DGX Spark-validated (alt: scitrera/dgx-spark-vllm:0.14.0-t4)
-          ports:
-            - containerPort: 8000
-          env:
-            - name: HF_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: hf-token
-                  key: token
-            - name: HUGGING_FACE_HUB_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: hf-token
-                  key: token
-            - name: FLASHINFER_DISABLE_VERSION_CHECK
-              value: "1"
-          resources:
-            limits:
-              nvidia.com/gpu: 1
-          args:
-            - "meta-llama/Llama-3.1-8B-Instruct"
-            - "--trust-remote-code"
-            - "--gpu-memory-utilization"
-            - "0.3"
-            - "--attention-backend"
-            - "FLASHINFER"
-            - "--port"
-            - "8000"
-          volumeMounts:
-            - name: hf-cache
-              mountPath: /root/.cache/huggingface
-      volumes:
-        - name: hf-cache
-          emptyDir: {}
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: vllm-llama-31-8b
-  namespace: spellingbee
-spec:
-  type: ClusterIP
-  selector: { app: vllm-llama-31-8b }
-  ports:
-    - name: http
-      port: 8000
-      targetPort: 8000
-
-# -----------------------
-# OPTIONAL: GPU vLLM - Nemotron Nano 12B v2 VL (vision-language)
+# GPU vLLM - Nemotron Nano 12B v2 VL (vision-language + text)
+# Single model handles both image extraction and text tasks (definitions, letter parsing).
 # Port 5566 matches vLLM recipe defaults.
 # -----------------------
 ---

@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+import random
 import re
 import time
 import uuid
@@ -21,11 +22,12 @@ APP_NAME = "spellingbee-gateway"
 
 # --------- Config (via env) ----------
 # vLLM OpenAI-compatible endpoints
-VLLM_TEXT_BASE = os.getenv("VLLM_TEXT_BASE", "http://vllm-llama-31-8b:8000/v1")
-VLLM_TEXT_MODEL = os.getenv("VLLM_TEXT_MODEL", "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16")
+# Single model serves both text and vision tasks
+VLLM_TEXT_BASE = os.getenv("VLLM_TEXT_BASE", "http://vllm-nemotron-vl:5566/v1")
+VLLM_TEXT_MODEL = os.getenv("VLLM_TEXT_MODEL", "nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-FP8")
 
 VLLM_VL_BASE = os.getenv("VLLM_VL_BASE", "http://vllm-nemotron-vl:5566/v1")
-VLLM_VL_MODEL = os.getenv("VLLM_VL_MODEL", "nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16")
+VLLM_VL_MODEL = os.getenv("VLLM_VL_MODEL", "nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-FP8")
 
 # Optional: later plug in an ASR service here (Nemotron Speech or anything).
 ASR_TIMEOUT_S = float(os.getenv("ASR_TIMEOUT_S", "30"))
@@ -1041,9 +1043,29 @@ async def turn_answer(
         if next_idx >= len(words):
             done = True
             s["completed"] = True
-            feedback = f"Great job! You finished all {len(words)} words."
+            feedback = random.choice([
+                f"Great job! You finished all {len(words)} words!",
+                f"Amazing! You conquered all {len(words)} words!",
+                f"Wow, you did it! All {len(words)} words done!",
+                f"Incredible work! That's all {len(words)} words!",
+                f"You're a spelling superstar! All {len(words)} words complete!",
+            ])
         else:
-            feedback = f"Nice! {target} is correct. Next word."
+            praise = random.choice([
+                f"Nice! {target} is correct.",
+                f"You got it! {target} — perfect spelling!",
+                f"Awesome! {target}, nailed it!",
+                f"Well done! {target} is spot on!",
+                f"Fantastic! {target}, that's right!",
+                f"Super! {target} — you're on fire!",
+                f"Brilliant! {target} is exactly right!",
+                f"Yes! {target} — great job!",
+                f"Wow, {target}! You're a spelling champ!",
+                f"Perfect! {target}, keep it up!",
+                f"That's it! {target} — way to go!",
+                f"Boom! {target} — you crushed it!",
+            ])
+            feedback = f"{praise} Next word."
     else:
         if attempts <= RETRY_ON_WRONG:
             feedback = "Not quite. Try again."

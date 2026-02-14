@@ -140,7 +140,7 @@ sample_conversation: |
 models:
   - type: main
     engine: nim
-    model: meta-llama/Llama-3.1-8B-Instruct
+    model: nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-FP8
     parameters:
       base_url: ${VLLM_TEXT_BASE}
 
