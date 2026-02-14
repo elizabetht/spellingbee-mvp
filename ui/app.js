@@ -490,6 +490,21 @@ function resizeImage(file, maxDim = 1536) {
   });
 }
 
+// Show selected filename in upload zone
+$("img").addEventListener("change", () => {
+  const f = $("img").files?.[0];
+  const zone = $("uploadZone");
+  if (f) {
+    zone.querySelector(".upload-icon").textContent = "\u2705";
+    zone.querySelector(".upload-text").textContent = f.name;
+    zone.classList.add("has-file");
+  } else {
+    zone.querySelector(".upload-icon").innerHTML = "&#x1F4F7;";
+    zone.querySelector(".upload-text").textContent = "Tap to upload word list image";
+    zone.classList.remove("has-file");
+  }
+});
+
 // Extract words from image
 $("btnExtract").onclick = async () => {
   const f = $("img").files?.[0];
