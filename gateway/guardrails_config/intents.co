@@ -1,0 +1,149 @@
+# ------------------------------------------------------------------
+#  Colang 1.0  –  Spelling Bee Intent Definitions
+# ------------------------------------------------------------------
+
+# ── definition ──
+define user ask definition
+  "What does it mean?"
+  "What is the definition?"
+  "Can you tell me the definition?"
+  "Definition please"
+  "What does that word mean?"
+  "Meaning of the word"
+  "Explain the word"
+  "What does that mean?"
+  "What's that mean?"
+  "Define it"
+  "What's the meaning?"
+  "Tell me the meaning"
+
+# ── sentence ──
+define user ask sentence
+  "Use it in a sentence"
+  "Can you use it in a sentence?"
+  "Give me a sentence"
+  "Sentence please"
+  "Use the word in a sentence"
+  "Example sentence"
+  "Put it in a sentence"
+  "How do you use it in a sentence?"
+
+# ── repeat ──
+define user ask repeat
+  "Repeat the word"
+  "Say it again"
+  "Say that again"
+  "One more time"
+  "Say the word"
+  "What was the word?"
+  "Again"
+  "Can you repeat it?"
+  "Hear it again"
+  "Tell me the word again"
+  "Repeat"
+  "Please repeat"
+  "What's the word?"
+  "What word is it?"
+
+# ── skip ──
+define user ask skip
+  "Skip"
+  "Skip this word"
+  "Next word"
+  "Move on"
+  "Pass"
+  "Next one"
+  "I don't know, skip"
+  "Let's skip this"
+  "Go to the next word"
+
+# ── spelling attempt ──
+define user attempt spelling
+  "A"
+  "B C D"
+  "C A T"
+  "alpha bravo charlie"
+  "D O G"
+  "H E L L O"
+  "S P E L L"
+  "bee ee ay"
+  "tee aitch ee"
+  "double-u oh are dee"
+  "A B C"
+  "B"
+
+# ── off-topic ──
+define user off topic
+  "Tell me a joke"
+  "What's the weather?"
+  "Who is the president?"
+  "Play a game"
+  "Sing me a song"
+  "Tell me a story"
+  "What time is it?"
+  "Search for something"
+  "Hey Siri"
+  "Okay Google"
+  "Can you play Minecraft?"
+  "What is Roblox?"
+  "Tell me about Pokemon"
+  "Do you like Fortnite?"
+  "Watch a movie"
+  "Play music"
+  "How old are you?"
+  "What are you?"
+  "Who are you?"
+  "Can you help me with math?"
+  "What is 2 plus 2?"
+  "Do you know any games?"
+  "Talk about something else"
+  "Let's chat"
+  "Tell me something fun"
+
+# ------------------------------------------------------------------
+#  Bot responses  (used by NeMo to identify the matched intent)
+# ------------------------------------------------------------------
+define bot respond to definition request
+  "INTENT:definition"
+
+define bot respond to sentence request
+  "INTENT:sentence"
+
+define bot respond to repeat request
+  "INTENT:repeat"
+
+define bot respond to skip request
+  "INTENT:skip"
+
+define bot respond to spelling attempt
+  "INTENT:spelling"
+
+define bot respond to off topic
+  "INTENT:off_topic"
+
+# ------------------------------------------------------------------
+#  Flows  –  connect user intents to bot responses
+# ------------------------------------------------------------------
+define flow handle definition
+  user ask definition
+  bot respond to definition request
+
+define flow handle sentence
+  user ask sentence
+  bot respond to sentence request
+
+define flow handle repeat
+  user ask repeat
+  bot respond to repeat request
+
+define flow handle skip
+  user ask skip
+  bot respond to skip request
+
+define flow handle spelling
+  user attempt spelling
+  bot respond to spelling attempt
+
+define flow handle off topic
+  user off topic
+  bot respond to off topic

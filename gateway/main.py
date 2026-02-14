@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Tuple
 import io
 import wave
 
+import redis
 import requests
 import riva.client
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -46,9 +47,148 @@ ELEVENLABS_MODEL_ID = os.getenv("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5")
 MAX_WORDS = int(os.getenv("MAX_WORDS", "200"))
 RETRY_ON_WRONG = int(os.getenv("RETRY_ON_WRONG", "1"))
 
-# ---------- In-memory session store (hackathon MVP) ----------
-# session_id -> session dict
-SESSIONS: Dict[str, dict] = {}
+# Redis session persistence
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+REDIS_DB = int(os.getenv("REDIS_DB", "0"))
+SESSION_TTL_SECONDS = int(os.getenv("SESSION_TTL_SECONDS", str(7 * 24 * 3600)))  # 7 days
+
+try:
+    _redis = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True,
+                         socket_connect_timeout=3, socket_timeout=3)
+    _redis.ping()
+    print(f"[Redis] Connected to {REDIS_HOST}:{REDIS_PORT}")
+except Exception as _e:
+    print(f"[Redis] Connection failed ({_e}), falling back to in-memory sessions")
+    _redis = None
+
+# ---------- Session store (Redis-backed with in-memory fallback) ----------
+_SESSIONS_FALLBACK: Dict[str, dict] = {}  # used only when Redis is unavailable
+
+
+def _session_key(session_id: str) -> str:
+    return f"session:{session_id}"
+
+
+def _save_session(session_id: str, session: dict):
+    """Persist session to Redis (or fallback dict)."""
+    # Don't persist transient fields
+    to_save = {k: v for k, v in session.items() if not k.startswith("_")}
+    if _redis:
+        try:
+            _redis.setex(_session_key(session_id), SESSION_TTL_SECONDS, json.dumps(to_save))
+            return
+        except Exception as e:
+            print(f"[Redis] save failed: {e}")
+    _SESSIONS_FALLBACK[session_id] = session
+
+
+def _load_session(session_id: str) -> Optional[dict]:
+    """Load session from Redis (or fallback dict)."""
+    if _redis:
+        try:
+            raw = _redis.get(_session_key(session_id))
+            if raw:
+                return json.loads(raw)
+        except Exception as e:
+            print(f"[Redis] load failed: {e}")
+    return _SESSIONS_FALLBACK.get(session_id)
+
+
+def _delete_session(session_id: str):
+    """Remove session from store."""
+    if _redis:
+        try:
+            _redis.delete(_session_key(session_id))
+        except Exception:
+            pass
+    _SESSIONS_FALLBACK.pop(session_id, None)
+
+
+def _list_student_sessions(student_name: str) -> List[dict]:
+    """Find incomplete sessions for a student. Returns list of {session_id, ...metadata}."""
+    results = []
+    if _redis:
+        try:
+            for key in _redis.scan_iter(match="session:*", count=100):
+                raw = _redis.get(key)
+                if not raw:
+                    continue
+                s = json.loads(raw)
+                if s.get("student_name", "").lower() == student_name.lower() and not s.get("completed"):
+                    sid = key.replace("session:", "", 1)
+                    results.append({"session_id": sid, **s})
+        except Exception as e:
+            print(f"[Redis] scan failed: {e}")
+    else:
+        for sid, s in _SESSIONS_FALLBACK.items():
+            if s.get("student_name", "").lower() == student_name.lower() and not s.get("completed"):
+                results.append({"session_id": sid, **s})
+    # Most recent first
+    results.sort(key=lambda x: x.get("last_active_ms", 0), reverse=True)
+    return results
+
+
+# ---------- Intent Classifier (Guardrails) ----------
+# Allowed intents during a spelling-bee session and their trigger patterns.
+# Everything that doesn't match an allowed intent is classified as off_topic.
+
+INTENT_PATTERNS: Dict[str, re.Pattern] = {
+    "definition": re.compile(
+        r"\b(definition|meaning|what does it mean|what does that mean|what is that"
+        r"|what's that mean|explain|what does \w+ mean)\b", re.IGNORECASE
+    ),
+    "sentence": re.compile(
+        r"\b(use it in a sentence|sentence|example|use the word)\b", re.IGNORECASE
+    ),
+    "repeat": re.compile(
+        r"\b(repeat|say it again|say that again|one more time|say the word"
+        r"|what was the word|again|hear it again|tell me the word)\b", re.IGNORECASE
+    ),
+    "skip": re.compile(
+        r"\b(skip|next word|move on|pass|skip this|next one)\b", re.IGNORECASE
+    ),
+}
+
+# Known off-topic triggers — things a child might say that aren't spelling
+OFF_TOPIC_PATTERN = re.compile(
+    r"\b(what are|tell me|who is|where is|how do|can you|do you know"
+    r"|play|watch|netflix|movie|game|song|music|youtube|story|joke"
+    r"|weather|time|news|search|google|hey siri|alexa|okay google"
+    r"|what is the|how old|how many|sing|dance|video|cartoon|pokemon"
+    r"|minecraft|roblox|fortnite|chat|talk about|help me with)\b", re.IGNORECASE
+)
+
+
+def classify_intent(transcript: str) -> Tuple[str, str]:
+    """
+    Classify a child's utterance into an allowed intent or off_topic.
+    Returns (intent, message) where message is a redirect for off_topic.
+    """
+    if not transcript or not transcript.strip():
+        return "spelling", ""
+
+    tx = transcript.strip().lower()
+
+    # Check allowed intents first (order matters — definition/sentence/repeat/skip)
+    for intent, pattern in INTENT_PATTERNS.items():
+        if pattern.search(tx):
+            return intent, ""
+
+    # Check for known off-topic triggers
+    if OFF_TOPIC_PATTERN.search(tx):
+        return "off_topic", "I can only help with spelling practice! Try spelling the word, or say 'repeat', 'definition', or 'skip'."
+
+    # Heuristic: long utterances (>8 words) that aren't plausible letter-spelling are off-topic
+    words = tx.split()
+    if len(words) > 8:
+        # Check if it looks like letter-spelling (mostly single chars or known homophones)
+        letter_like = sum(1 for w in words if len(w) <= 3 or w in LETTER_HOMOPHONES or w in NATO)
+        if letter_like < len(words) * 0.5:
+            return "off_topic", "That doesn't sound like spelling. Let's get back to it! Spell the word, or say 'repeat' or 'definition'."
+
+    # Default: treat as a spelling attempt
+    return "spelling", ""
 
 # ---------- FastAPI ----------
 app = FastAPI(title=APP_NAME)
@@ -351,6 +491,7 @@ class AnswerResponse(BaseModel):
     score_correct: int
     score_total: int
     wrong_words: List[str] = []
+    is_guardrail: bool = False  # True when response is a guardrail redirect (not a real attempt)
 
 class RandomWordsResponse(BaseModel):
     words: List[str]
@@ -364,10 +505,101 @@ class WordContextResponse(BaseModel):
     definition: str
     sentence: str
 
+class ClassifyIntentRequest(BaseModel):
+    session_id: str
+    transcript: str
+
+class ClassifyIntentResponse(BaseModel):
+    intent: str  # spelling | definition | sentence | repeat | skip | off_topic
+    message: str = ""  # redirect message for off_topic
+
+class SessionStatusResponse(BaseModel):
+    session_id: str
+    student_name: str
+    words: List[str]
+    idx: int
+    total: int
+    score_correct: int
+    score_total: int
+    wrong_words: List[str]
+    skipped_words: List[str]
+    completed: bool
+    round: int
+    created_ms: int
+    last_active_ms: int
+
+class ResumeSessionRequest(BaseModel):
+    session_id: str
+
 # ---------- Routes ----------
 @app.get("/healthz")
 def healthz():
-    return {"ok": True, "ts": now_ms()}
+    redis_ok = False
+    if _redis:
+        try:
+            _redis.ping()
+            redis_ok = True
+        except Exception:
+            pass
+    return {"ok": True, "ts": now_ms(), "redis": redis_ok}
+
+
+@app.post("/classify_intent", response_model=ClassifyIntentResponse)
+def classify_intent_endpoint(req: ClassifyIntentRequest):
+    """Classify a child's utterance into an allowed intent or off_topic."""
+    s = _load_session(req.session_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="Unknown session_id")
+    intent, message = classify_intent(req.transcript)
+    if intent == "off_topic" and not message:
+        message = "I can only help with spelling practice! Try spelling the word, or say 'repeat', 'definition', or 'skip'."
+    return {"intent": intent, "message": message}
+
+
+@app.get("/session/{session_id}", response_model=SessionStatusResponse)
+def get_session_status(session_id: str):
+    """Get current session state for resume/status checks."""
+    s = _load_session(session_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="Session not found or expired")
+    return {
+        "session_id": session_id,
+        "student_name": s.get("student_name", "Student"),
+        "words": s["words"],
+        "idx": s["idx"],
+        "total": len(s["words"]),
+        "score_correct": s["score_correct"],
+        "score_total": s["score_total"],
+        "wrong_words": s.get("wrong_words", []),
+        "skipped_words": s.get("skipped_words", []),
+        "completed": s.get("completed", False),
+        "round": s.get("round", 1),
+        "created_ms": s.get("created_ms", 0),
+        "last_active_ms": s.get("last_active_ms", 0),
+    }
+
+
+@app.post("/session/resume", response_model=StartSessionResponse)
+def resume_session(req: ResumeSessionRequest):
+    """Resume an existing session from where the child left off."""
+    s = _load_session(req.session_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="Session not found or expired")
+    if s.get("completed"):
+        raise HTTPException(status_code=409, detail="Session already completed")
+    idx = s["idx"]
+    words = s["words"]
+    if idx >= len(words):
+        raise HTTPException(status_code=409, detail="Session already complete")
+    # Touch last_active timestamp
+    s["last_active_ms"] = now_ms()
+    _save_session(req.session_id, s)
+    return {
+        "session_id": req.session_id,
+        "idx": idx,
+        "word": words[idx],
+        "total": len(words),
+    }
 
 
 def _generate_word_context(session: dict, word: str) -> dict:
@@ -566,7 +798,7 @@ def start_session(req: StartSessionRequest):
         raise HTTPException(status_code=400, detail="No valid words")
 
     session_id = str(uuid.uuid4())
-    SESSIONS[session_id] = {
+    session = {
         "student_name": req.student_name or "Student",
         "words": words,
         "idx": 0,
@@ -574,9 +806,14 @@ def start_session(req: StartSessionRequest):
         "score_correct": 0,
         "score_total": 0,
         "wrong_words": [],  # words the child got wrong (exhausted retries)
+        "skipped_words": [],  # words the child skipped
         "word_context": {},  # word -> {"definition": ..., "sentence": ...}
+        "completed": False,
+        "round": 1,
         "created_ms": now_ms(),
+        "last_active_ms": now_ms(),
     }
+    _save_session(session_id, session)
     return {
         "session_id": session_id,
         "idx": 0,
@@ -586,7 +823,7 @@ def start_session(req: StartSessionRequest):
 
 @app.post("/turn/ask", response_model=AskResponse)
 def turn_ask(session_id: str = Form(...)):
-    s = SESSIONS.get(session_id)
+    s = _load_session(session_id)
     if not s:
         raise HTTPException(status_code=404, detail="Unknown session_id")
     idx = s["idx"]
@@ -609,7 +846,7 @@ async def turn_answer(
     audio: Optional[UploadFile] = File(None),
     transcript: Optional[str] = Form(None),
 ):
-    s = SESSIONS.get(session_id)
+    s = _load_session(session_id)
     if not s:
         raise HTTPException(status_code=404, detail="Unknown session_id")
 
@@ -629,7 +866,8 @@ async def turn_answer(
             "done": True,
             "score_correct": s["score_correct"],
             "score_total": s["score_total"],
-            "wrong_words": s["wrong_words"],
+            "wrong_words": s.get("wrong_words", []),
+            "is_guardrail": False,
         }
 
     target = words[idx]
@@ -646,6 +884,82 @@ async def turn_answer(
     tx = browser_tx or asr_tx
     if not tx:
         raise HTTPException(status_code=400, detail="Provide transcript or audio")
+
+    # ── Guardrail: classify intent before processing ──
+    intent, guardrail_msg = classify_intent(tx)
+
+    if intent == "off_topic":
+        # Return a guardrail redirect — not counted as an attempt
+        return {
+            "session_id": session_id,
+            "idx": idx,
+            "word": target,
+            "transcript": tx,
+            "letters": "",
+            "correct": False,
+            "attempts_for_word": s.get("attempts", {}).get(str(idx), 0),
+            "feedback_text": guardrail_msg or "I can only help with spelling practice! Try spelling the word, or say 'repeat', 'definition', or 'skip'.",
+            "next_idx": idx,
+            "done": False,
+            "score_correct": s["score_correct"],
+            "score_total": s["score_total"],
+            "wrong_words": [],
+            "is_guardrail": True,
+        }
+
+    if intent == "skip":
+        # Skip the current word without penalty
+        s.setdefault("skipped_words", []).append(target)
+        next_idx = idx + 1
+        s["idx"] = next_idx
+        s["last_active_ms"] = now_ms()
+        done = next_idx >= len(words)
+        if done:
+            s["completed"] = True
+        _save_session(session_id, s)
+        return {
+            "session_id": session_id,
+            "idx": idx,
+            "word": target,
+            "transcript": tx,
+            "letters": "",
+            "correct": False,
+            "attempts_for_word": 0,
+            "feedback_text": f"Skipping {target}. " + ("You're all done!" if done else "Next word."),
+            "next_idx": min(next_idx, len(words)),
+            "done": done,
+            "score_correct": s["score_correct"],
+            "score_total": s["score_total"],
+            "wrong_words": s.get("wrong_words", []) if done else [],
+            "is_guardrail": False,
+        }
+
+    if intent in ("definition", "sentence", "repeat"):
+        # These intents should be handled by the client before reaching /turn/answer,
+        # but if they arrive here, return a guardrail redirect instead of grading them
+        hint = {
+            "definition": "Use the definition button or say it during listening.",
+            "sentence": "Use the definition button or say it during listening.",
+            "repeat": "Tap the speaker icon to hear the word again.",
+        }
+        return {
+            "session_id": session_id,
+            "idx": idx,
+            "word": target,
+            "transcript": tx,
+            "letters": "",
+            "correct": False,
+            "attempts_for_word": s.get("attempts", {}).get(str(idx), 0),
+            "feedback_text": hint.get(intent, ""),
+            "next_idx": idx,
+            "done": False,
+            "score_correct": s["score_correct"],
+            "score_total": s["score_total"],
+            "wrong_words": [],
+            "is_guardrail": True,
+        }
+
+    # ── intent == "spelling" — proceed with letter parsing ──
 
     # 2) Parse letters from all available transcripts, keep best result
     candidates = []
@@ -710,8 +1024,9 @@ async def turn_answer(
                 break
 
     # 5) Update attempts + score
-    attempts = s["attempts"].get(idx, 0) + 1
-    s["attempts"][idx] = attempts
+    attempts_key = str(idx)
+    attempts = s.get("attempts", {}).get(attempts_key, 0) + 1
+    s.setdefault("attempts", {})[attempts_key] = attempts
     s["score_total"] += 1
     if correct:
         s["score_correct"] += 1
@@ -725,6 +1040,7 @@ async def turn_answer(
         s["idx"] = next_idx
         if next_idx >= len(words):
             done = True
+            s["completed"] = True
             feedback = f"Great job! You finished all {len(words)} words."
         else:
             feedback = f"Nice! {target} is correct. Next word."
@@ -734,12 +1050,17 @@ async def turn_answer(
         else:
             reveal = " ... ".join(list(target_norm))
             feedback = f"Not quite. The correct spelling is {reveal}. ... Next word."
-            s["wrong_words"].append(target)
+            s.setdefault("wrong_words", []).append(target)
             next_idx = idx + 1
             s["idx"] = next_idx
             if next_idx >= len(words):
                 done = True
+                s["completed"] = True
                 feedback = f"Not quite. The correct spelling was {reveal}. ... You're done for today!"
+
+    # Persist updated session
+    s["last_active_ms"] = now_ms()
+    _save_session(session_id, s)
 
     return {
         "session_id": session_id,
@@ -754,18 +1075,21 @@ async def turn_answer(
         "done": done,
         "score_correct": s["score_correct"],
         "score_total": s["score_total"],
-        "wrong_words": s["wrong_words"] if done else [],
+        "wrong_words": s.get("wrong_words", []) if done else [],
+        "is_guardrail": False,
     }
 
 
 @app.post("/word/context", response_model=WordContextResponse)
 def word_context(req: WordContextRequest):
     """Return definition + example sentence for a word. Guardrailed: word must be in session."""
-    s = SESSIONS.get(req.session_id)
+    s = _load_session(req.session_id)
     if not s:
         raise HTTPException(status_code=404, detail="Unknown session_id")
     word_norm = normalize_word(req.word)
     if word_norm not in s["words"]:
         raise HTTPException(status_code=403, detail="Word not in session word list")
     ctx = _generate_word_context(s, word_norm)
+    # Persist cache back to session store
+    _save_session(req.session_id, s)
     return {"word": word_norm, "definition": ctx.get("definition", ""), "sentence": ctx.get("sentence", "")}

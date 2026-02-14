@@ -10,9 +10,13 @@ An AI-powered spelling practice app for kids, built for the NVIDIA GTC Hackathon
 
 3. **Instant spoken feedback** — The app parses the child's spoken letters, checks the spelling, and speaks the result. Correct? Moves to the next word. Wrong? Gets one retry before revealing the correct spelling.
 
-4. **Ask for help** — During practice, the child can say "what does it mean?" or "definition" and the app will speak the definition again without counting it as a spelling attempt.
+4. **Ask for help** — During practice, the child can say “what does it mean?” or “definition” and the app will speak the definition again without counting it as a spelling attempt. Other allowed commands: “repeat”, “use it in a sentence”, and “skip”.
 
-5. **Auto-review** — Any words the child gets wrong are collected and automatically replayed in a review round at the end.
+5. **Guardrails** — If the child asks off-topic questions (“tell me a joke”, “who is the president”), the app gently redirects back to spelling. A server-side intent classifier ensures only spelling-relevant interactions are processed.
+
+6. **Auto-review** — Any words the child gets wrong are collected and automatically replayed in a review round at the end.
+
+7. **Session memory** — Sessions persist in Redis. If the child closes the browser mid-practice and comes back later, the app offers to resume from where they left off. Sessions survive gateway restarts and last 7 days.
 
 ## Architecture
 
@@ -30,7 +34,8 @@ spellingbee-mvp/
 | Component | Role |
 |-----------|------|
 | **UI** | Vanilla HTML/JS/CSS served by nginx. Three stages: Setup → Session → Done. Auto-starts a voice-driven loop on practice start — speaks prompts via TTS, records via mic with VAD silence detection, submits transcript, speaks feedback. Client-side image resize before upload. |
-| **Gateway** | FastAPI (Python). Central orchestrator — handles `/extract_words`, `/session/start`, `/turn/ask`, `/turn/answer`, `/word/context`, `/tts`. Manages sessions in-memory, runs deterministic letter parsing with LLM fallback, generates child-friendly definitions, tracks wrong words. |
+| **Gateway** | FastAPI (Python). Central orchestrator — handles `/extract_words`, `/session/start`, `/session/resume`, `/turn/ask`, `/turn/answer`, `/classify_intent`, `/word/context`, `/tts`. Manages sessions in Redis, runs deterministic letter parsing with LLM fallback, generates child-friendly definitions, tracks wrong words. Server-side intent classifier acts as guardrails. |
+| **Redis** | Session persistence store. Stores session state (word list, progress, scores, wrong/skipped words) with 7-day TTL. Survives gateway restarts. AOF-enabled for durability. |
 | **ASR** | `faster-whisper` with Whisper `base.en` model (CPU-only). Also supports browser Web Speech API as a zero-latency alternative — the browser sends the live transcript directly. |
 | **Nemotron VL** | NVIDIA `Nemotron-Nano-12B-v2-VL-FP8` via vLLM. Extracts spelling words from uploaded photos of word lists. |
 | **Text LLM** | Meta `Llama-3.1-8B-Instruct` via vLLM. Two roles: (1) LLM fallback for letter parsing when deterministic matching fails, (2) generates child-friendly word definitions and example sentences. |
@@ -97,11 +102,14 @@ sequenceDiagram
 |----------|--------|-------------|
 | `/extract_words` | POST | Upload image → returns extracted word list |
 | `/session/start` | POST | Start a spelling session with a word list |
+| `/session/resume` | POST | Resume an existing session from where the child left off |
+| `/session/{id}` | GET | Get current session state (progress, scores, completion status) |
+| `/classify_intent` | POST | Classify child’s utterance into allowed intent or off_topic (guardrails) |
 | `/turn/ask` | POST | Get the next word prompt (with definition) |
-| `/turn/answer` | POST | Submit spelling attempt (transcript + audio) |
+| `/turn/answer` | POST | Submit spelling attempt (transcript + audio) — with server-side guardrails |
 | `/word/context` | POST | Get definition + sentence for a word on demand |
 | `/tts` | POST | Text-to-speech (Magpie → ElevenLabs fallback) |
-| `/healthz` | GET | Health check |
+| `/healthz` | GET | Health check (includes Redis status) |
 
 ### Letter Parsing Pipeline
 
@@ -115,10 +123,13 @@ Spoken letter recognition is the hardest problem. The app uses a multi-stage app
 ## Key Features
 
 - **Fully voice-driven** — no interaction needed during practice; speaks prompts, listens with VAD, speaks feedback automatically
+- **Server-side guardrails** — intent classifier restricts interactions to spelling-relevant commands only (spell, definition, repeat, sentence, skip); off-topic questions are gently redirected
+- **Session memory (Redis)** — sessions persist across browser closes and gateway restarts; resume from exactly where you left off with 7-day TTL
 - **Image-to-word-list extraction** using Nemotron VL (FP8) vision-language model
-- **Word definitions & example sentences** — auto-spoken before each word, also available on demand ("what does it mean?")
+- **Word definitions & example sentences** — auto-spoken before each word, also available on demand (“what does it mean?”)
 - **Deterministic + LLM letter parsing** with 60+ phonetic homophones, NATO alphabet, and intelligent fallback
 - **Wrong-word tracking & auto-review** — missed words automatically replayed in review rounds
+- **Skip word** — say “skip” to move to the next word without penalty
 - **25-word encouragement** — nudge overlay when ending early, encouraging kids to keep going
 - **Multi-tier TTS** — NVIDIA Magpie (primary) → ElevenLabs → browser SpeechSynthesis
 - **Live transcript display** — real-time display of what the mic is hearing

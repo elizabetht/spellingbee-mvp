@@ -19,33 +19,57 @@ const state = {
 
 const MIN_WORDS = 25;
 
-/* ── Session Persistence (localStorage) ───────────────── */
+/* ── Session Persistence (localStorage + Redis) ──────── */
 const STORAGE_KEY = "spellingbee_session";
 
 function saveProgress() {
   try {
+    // Save session_id and metadata — server is the source of truth
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      sessionId: state.sessionId,
       originalWords: state.originalWords,
       wordsCompleted: state.wordsCompleted,
       wrongWords: state.wrongWords,
-      remainingWords: state.originalWords.slice(state.wordsCompleted),
       savedAt: Date.now(),
     }));
   } catch (e) { /* ignore */ }
 }
 
-function loadSavedSession() {
+async function loadSavedSession() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
     const saved = JSON.parse(raw);
-    if (Date.now() - saved.savedAt > 24 * 60 * 60 * 1000) {
+    // Expire after 7 days (matching Redis TTL)
+    if (Date.now() - saved.savedAt > 7 * 24 * 60 * 60 * 1000) {
       localStorage.removeItem(STORAGE_KEY);
       return null;
     }
-    if (saved.remainingWords && saved.remainingWords.length > 0) return saved;
-    localStorage.removeItem(STORAGE_KEY);
-    return null;
+    if (!saved.sessionId) {
+      localStorage.removeItem(STORAGE_KEY);
+      return null;
+    }
+    // Verify session is still alive on the server
+    try {
+      const status = await api("/session/" + saved.sessionId);
+      if (status.completed) {
+        localStorage.removeItem(STORAGE_KEY);
+        return null;
+      }
+      return {
+        sessionId: saved.sessionId,
+        originalWords: status.words,
+        wordsCompleted: status.idx,
+        wrongWords: status.wrong_words || [],
+        total: status.total,
+        idx: status.idx,
+        studentName: status.student_name,
+      };
+    } catch (e) {
+      // Session expired or server down — clear
+      localStorage.removeItem(STORAGE_KEY);
+      return null;
+    }
   } catch (e) { return null; }
 }
 
@@ -296,15 +320,27 @@ async function handsFreeLoop() {
   }
   if (!state.handsFreeActive) return;
 
-  // Check if the child asked for a definition or sentence usage
-  const tx = (recording.transcript || "").toLowerCase();
-  const sentencePattern = /\b(use it in a sentence|sentence)\b/;
-  const defPattern = /\b(definition|meaning|what does it mean|what does that mean|what is that|what's that mean|explain)\b/;
-  const wantsSentence = sentencePattern.test(tx);
-  const wantsDef = defPattern.test(tx);
-  if (wantsSentence || wantsDef) {
+  // ── Server-side intent classification (guardrails) ──
+  const tx = (recording.transcript || "").trim();
+  let intent = "spelling";
+  let guardrailMsg = "";
+  try {
+    const classification = await api("/classify_intent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: state.sessionId, transcript: tx }),
+    });
+    intent = classification.intent;
+    guardrailMsg = classification.message || "";
+  } catch (e) {
+    // If classification fails, fall through to spelling (server-side /turn/answer has guardrails too)
+    console.warn("Intent classification failed, treating as spelling:", e);
+  }
+
+  // Handle non-spelling intents client-side for instant UX
+  if (intent === "definition" || intent === "sentence") {
     setLiveTranscript("");
-    setRing("idle", "\u{1F4D6}", wantsSentence ? "Sentence usage\u2026" : "Getting definition\u2026");
+    setRing("idle", "\u{1F4D6}", intent === "sentence" ? "Sentence usage\u2026" : "Getting definition\u2026");
     try {
       const ctx = await api("/word/context", {
         method: "POST",
@@ -312,7 +348,7 @@ async function handsFreeLoop() {
         body: JSON.stringify({ word: state.word, session_id: state.sessionId }),
       });
       let defText;
-      if (wantsSentence && ctx.sentence) {
+      if (intent === "sentence" && ctx.sentence) {
         defText = ctx.sentence;
       } else if (ctx.definition) {
         defText = `${state.word} means ${ctx.definition}`;
@@ -323,7 +359,6 @@ async function handsFreeLoop() {
     } catch (e) {
       await speakAndWait(`Sorry, I couldn't get the definition for ${state.word}.`);
     }
-    // Re-prompt and listen again (don't count as an attempt)
     if (state.handsFreeActive) {
       await speakAndWait(`Now spell ${state.word}.`);
       await new Promise(r => setTimeout(r, 400));
@@ -332,17 +367,28 @@ async function handsFreeLoop() {
     return;
   }
 
-  // Detect off-topic questions/chat (not spelling letters)
-  const chatPattern = /\b(what are|tell me|who is|where is|how do|can you|do you know|play|watch|netflix|movie|game|song|music|youtube|story|joke|weather|time|news|search|google|hey siri|alexa|okay google)\b/;
-  const words = tx.trim().split(/\s+/);
-  if (chatPattern.test(tx) || (words.length > 6 && !tx.split("").every(c => /[a-z\s]/.test(c)))) {
-    await speakAndWait(`I can only help with spelling practice! Let's get back to it. Spell ${state.word}.`);
+  if (intent === "repeat") {
+    setLiveTranscript("");
+    setRing("idle", "\u{1F50A}", "Repeating\u2026");
+    await speakAndWait(state.prompt);
     if (state.handsFreeActive) {
       await new Promise(r => setTimeout(r, 400));
       handsFreeLoop();
     }
     return;
   }
+
+  if (intent === "off_topic") {
+    setLiveTranscript("");
+    await speakAndWait(guardrailMsg || `I can only help with spelling practice! Let's get back to it. Spell ${state.word}.`);
+    if (state.handsFreeActive) {
+      await new Promise(r => setTimeout(r, 400));
+      handsFreeLoop();
+    }
+    return;
+  }
+
+  // intent === "spelling" or "skip" — send to server for processing
 
   setRing("processing", "\u2699\uFE0F", "Checking\u2026");
   try {
@@ -352,6 +398,18 @@ async function handsFreeLoop() {
     if (recording.transcript) fd.append("transcript", recording.transcript);
     const data = await api("/turn/answer", { method: "POST", body: fd });
 
+    // Handle guardrail responses (not a real attempt)
+    if (data.is_guardrail) {
+      setLiveTranscript("");
+      await speakAndWait(data.feedback_text);
+      if (state.handsFreeActive) {
+        await speakAndWait(`Spell ${state.word}.`);
+        await new Promise(r => setTimeout(r, 400));
+        handsFreeLoop();
+      }
+      return;
+    }
+
     $("score").textContent = data.score_correct + " / " + data.score_total;
     showResult(data.correct, data.letters, data.feedback_text, state.word);
     setRing(data.correct ? "correct" : "wrong", data.correct ? "\u2705" : "\u274C", "");
@@ -359,12 +417,11 @@ async function handsFreeLoop() {
 
     // Track wrong words (when word is skipped after max retries)
     if (!data.correct && data.attempts_for_word > 1) {
-      // Word was skipped — add to wrong list if not already there
       if (data.word && !state.wrongWords.includes(data.word)) {
         state.wrongWords.push(data.word);
       }
     }
-    if (data.correct || data.attempts_for_word > 1) {
+    if (data.correct || data.attempts_for_word > 1 || intent === "skip") {
       state.wordsCompleted++;
       saveProgress();
     }
@@ -645,12 +702,12 @@ async function startReviewRound() {
 showStage("stageSetup");
 
 // Check for a saved session to resume
-(function checkResume() {
-  const saved = loadSavedSession();
+(async function checkResume() {
+  const saved = await loadSavedSession();
   if (!saved) return;
-  const remaining = saved.remainingWords.length;
-  const total = saved.originalWords.length;
-  const done = total - remaining;
+  const remaining = saved.total - saved.idx;
+  const done = saved.idx;
+  const total = saved.total;
   $("resumeMsg").textContent = `You practiced ${done} of ${total} words last time. ${remaining} left!`;
   $("resumeBanner").classList.remove("hidden");
 
@@ -659,17 +716,18 @@ showStage("stageSetup");
     state.wordsCompleted = done;
     state.wrongWords = saved.wrongWords || [];
     state.originalWords = saved.originalWords;
-    const words = saved.remainingWords;
     try {
-      const data = await api("/session/start", {
+      // Resume the existing server session (no new session created)
+      const data = await api("/session/resume", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ words, student_name: "Student" }),
+        body: JSON.stringify({ session_id: saved.sessionId }),
       });
       state.sessionId = data.session_id;
       state.idx = data.idx;
       state.word = data.word;
       state.total = data.total;
+      saveProgress();
       $("score").textContent = "0 / 0";
       $("progress").textContent = `${done + 1} / ${total}`;
       await ask();
@@ -678,7 +736,9 @@ showStage("stageSetup");
       state.handsFreeActive = true;
       handsFreeLoop();
     } catch (e) {
-      alert("Resume failed: " + e.message);
+      // Session expired on server — fall back to creating a new one with remaining words
+      clearSavedSession();
+      alert("Session expired. Starting fresh.");
     }
   };
 

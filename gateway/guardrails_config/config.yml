@@ -1,0 +1,150 @@
+instructions:
+  - type: general
+    content: |
+      You are a spelling bee assistant for children. Your ONLY job is to classify
+      what the child just said into one of the allowed intents. You must NOT answer
+      questions, tell stories, or do anything outside the spelling practice flow.
+
+      Allowed intents:
+        - spelling: the child is attempting to spell a word (letter by letter)
+        - definition: the child is asking for the meaning of the word
+        - sentence: the child wants the word used in a sentence
+        - repeat: the child wants to hear the word again
+        - skip: the child wants to skip this word and move on
+        - off_topic: anything that is NOT one of the above
+
+sample_conversation: |
+  user "Can you give me the definition?"
+    ask definition
+  bot respond to definition request
+    "Fetching the definition for you."
+  user "Use it in a sentence please."
+    ask sentence
+  bot respond to sentence request
+    "Here is a sentence with the word."
+  user "Repeat the word."
+    ask repeat
+  bot respond to repeat request
+    "Let me repeat the word for you."
+  user "Skip this word."
+    ask skip
+  bot respond to skip request
+    "Skipping to the next word."
+  user "A B C D"
+    attempt spelling
+  bot respond to spelling attempt
+    "Let me check your spelling."
+  user "Tell me a joke."
+    off topic
+  bot respond to off topic
+    "I can only help with spelling practice! Try spelling the word, or say repeat, definition, or skip."
+
+models:
+  - type: main
+    engine: openai
+    model: ${VLLM_TEXT_MODEL}
+    parameters:
+      api_base: ${VLLM_TEXT_BASE}
+      api_key: "not-needed"
+
+rails:
+  dialog:
+    single_call:
+      enabled: True
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+      enabled: True    single_call:  dialog:rails:      api_key: "not-needed"      api_base: ${VLLM_TEXT_BASE}    parameters:    model: ${VLLM_TEXT_MODEL}    engine: openai  - type: mainmodels:    "I can only help with spelling practice! Try spelling the word, or say repeat, definition, or skip."  bot respond to off topic    off topic  user "Tell me a joke."    "Let me check your spelling."  bot respond to spelling attempt    attempt spelling  user "A B C D"    "Skipping to the next word."  bot respond to skip request    ask skip  user "Skip this word."    "Let me repeat the word for you."  bot respond to repeat request    ask repeat  user "Repeat the word."    "Here is a sentence with the word."  bot respond to sentence request    ask sentence  user "Use it in a sentence please."    "Fetching the definition for you."  bot respond to definition request    ask definition  user "Can you give me the definition?"sample_conversation: |        - off_topic: anything that is NOT one of the above        - skip: the child wants to skip this word and move on        - repeat: the child wants to hear the word again        - sentence: the child wants the word used in a sentence        - definition: the child is asking for the meaning of the word        - spelling: the child is attempting to spell a word (letter by letter)      Allowed intents:      questions, tell stories, or do anything outside the spelling practice flow.      what the child just said into one of the allowed intents. You must NOT answer      You are a spelling bee assistant for children. Your ONLY job is to classify    content: |  - type: general  - type: general
+    content: |
+      You are a guardrails assistant for a children's spelling bee app.
+      Your ONLY job is to classify the child's utterance into one of the
+      allowed intents: spelling a word, asking for a definition, asking
+      for a sentence, asking to repeat the word, or asking to skip.
+      Anything that does not fit these intents is off-topic.
+
+sample_conversation: |
+  user "Can you give me the definition?"
+    ask definition
+  bot inform definition
+    "Sure! Let me get that for you."
+  user "Use it in a sentence please."
+    ask sentence
+    bot inform sentence
+    "Here's a sentence with that word."
+  user "Can you repeat the word?"
+    ask repeat
+  bot inform repeat
+    "Sure, I'll say it again."
+  user "Skip this word."
+    ask skip
+  bot inform skip
+    "Okay, moving on to the next word."
+  user "B-E-A-U-T-I-F-U-L"
+    spell word
+  bot accept spelling
+    "Let me check your spelling."
+  user "Tell me a joke."
+    off topic
+  bot refuse off topic
+    "I can only help with spelling practice! Try spelling the word, or say 'repeat', 'definition', or 'skip'."
+
+models:
+  - type: main
+    engine: nim
+    model: meta-llama/Llama-3.1-8B-Instruct
+    parameters:
+      base_url: ${VLLM_TEXT_BASE}
+
+rails:
+  dialog:
+    user_messages:
+      embeddings_only: true

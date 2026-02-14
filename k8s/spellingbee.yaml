@@ -73,6 +73,10 @@ spec:
               value: "http://vllm-nemotron-vl:5566/v1"
             - name: VLLM_VL_MODEL
               value: "nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-FP8"
+            - name: REDIS_HOST
+              value: "redis"
+            - name: REDIS_PORT
+              value: "6379"
             - name: MAGPIE_TTS_API_KEY
               valueFrom:
                 secretKeyRef:
@@ -256,3 +260,60 @@ spec:
     - name: http
       port: 5566
       targetPort: 5566
+
+# -----------------------
+# Redis (session persistence)
+# -----------------------
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-data
+  namespace: spellingbee
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: spellingbee
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: redis }
+  template:
+    metadata:
+      labels: { app: redis }
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: controller
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          args: ["--appendonly", "yes"]
+          ports:
+            - containerPort: 6379
+          volumeMounts:
+            - name: redis-data
+              mountPath: /data
+      volumes:
+        - name: redis-data
+          persistentVolumeClaim:
+            claimName: redis-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: spellingbee
+spec:
+  type: ClusterIP
+  selector: { app: redis }
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: 6379
