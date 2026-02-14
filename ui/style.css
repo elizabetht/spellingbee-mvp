@@ -111,6 +111,10 @@ main {
   border-style: solid;
   background: var(--surface2);
 }
+.upload-zone.has-file:hover, .upload-zone.has-file:focus-within {
+  border-color: var(--green, #4caf50);
+  background: var(--surface2);
+}
 .upload-zone input { display: none; }
 .upload-icon { font-size: 2.4rem; }
 .upload-text { color: var(--text2); font-size: .9rem; }
