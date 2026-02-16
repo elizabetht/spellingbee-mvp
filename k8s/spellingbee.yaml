@@ -87,7 +87,7 @@ spec:
             - name: ELEVENLABS_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: elevenlabs-key
+                  name: elevenlabs-api-key
                   key: api-key
                   optional: true
           ports:
@@ -170,6 +170,14 @@ spec:
             - "FLASHINFER"
             - "--port"
             - "5566"
+          readinessProbe:
+            httpGet: { path: /health, port: 5566 }
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: 5566 }
+            initialDelaySeconds: 60
+            periodSeconds: 15
           volumeMounts:
             - name: hf-cache
               mountPath: /root/.cache/huggingface
